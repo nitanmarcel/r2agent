@@ -11,15 +11,30 @@ async def analyze(
 ) -> str:
     """Run automatic analysis on the opened binary.
 
-    Analysis identifies functions, strings, cross-references, and other
-    structural elements. Only run this once per session - results are cached.
+    Identifies functions, strings, cross-references, and structural elements.
+    Results are cached for the entire session.
+
+    When to Use:
+    - At the START of a session when first exploring a new binary
+    - When the user explicitly asks to "analyze" the binary
+    - When list_functions returns empty AND analysis hasn't been run yet
+
+    When NOT to Use:
+    - NEVER call analyze() just to list functions - check list_functions first
+    - NEVER call analyze() multiple times - results persist for the session
+    - NEVER call analyze() before other tools "just in case"
+    - If you already called analyze() in this session, do NOT call it again
+
+    IMPORTANT: Analysis state persists. Once run, ALL tools can use the results.
+    If uncertain whether analysis was run, try list_functions first - if it
+    returns functions, analysis is already complete.
 
     Args:
-        level: Analysis depth level
-            - "a": Basic analysis (fast, identifies functions)
-            - "aa": All analysis (recommended default, comprehensive)
-            - "aaa": All + autoname (adds automatic function naming)
-            - "aaaa": Deep analysis (slowest, maximum detail)
+        level: Analysis depth (default "aa" is sufficient for most tasks)
+            - "a": Basic (fast, finds functions)
+            - "aa": Standard (recommended, comprehensive)
+            - "aaa": Extended (adds auto-naming)
+            - "aaaa": Deep (slowest, maximum detail)
     """
     result = await r2(level)
     return result if result else "Analysis complete"
@@ -29,16 +44,21 @@ async def analyze(
 async def binary_info(
     detail: Literal["summary", "detailed", "json"] = "summary",
 ) -> str:
-    """Get metadata and information about the opened binary file.
+    """Get metadata about the opened binary file.
 
-    Shows architecture, file type, entry points, sections, imports, exports,
-    and other structural information useful for understanding the target.
+    Shows architecture, file type, entry points, and other structural info.
+    Does NOT require analyze() - this reads file headers directly.
+
+    When to Use:
+    - To understand what kind of binary you're working with
+    - To check architecture, endianness, or file format
+    - At the start of analysis to orient yourself
 
     Args:
-        detail: Output format/detail level
-            - "summary": Summary info (file type, arch, bits, endian)
-            - "detailed": Detailed info (all headers and metadata)
-            - "json": JSON output (machine-readable format)
+        detail: Output level
+            - "summary": Basic info (arch, bits, endian, type)
+            - "detailed": All headers and metadata
+            - "json": Machine-readable format
     """
     modifier = {"summary": "", "detailed": "I", "json": "j"}[detail]
     cmd = f"i{modifier}"
@@ -51,23 +71,35 @@ async def list_functions(
     format: Literal["standard", "verbose", "quiet", "size_sum", "count"] = "standard",
     sort: Literal["none", "address", "size", "name"] = "none",
 ) -> str:
-    """List all functions discovered during analysis.
+    """List all functions discovered in the binary.
 
-    Use this to get an overview of the binary's code structure, find specific
-    functions, or analyze function sizes and complexity.
+    Returns function addresses, sizes, and names. Use this to explore code
+    structure, find entry points, or locate specific functions.
+
+    When to Use:
+    - To see what functions exist in the binary
+    - To find a specific function by name
+    - Before decompiling, to get the correct function address
+
+    When NOT to Use:
+    - Do NOT call analyze() before this - just call list_functions directly
+    - If you need function code, use decompile() instead
+
+    NOTE: If this returns empty results and you haven't analyzed yet, THEN
+    call analyze() once. But try this tool first.
 
     Args:
         format: Output format
-            - "standard": Standard list (address, size, name)
-            - "verbose": Verbose list (includes signature, locals, xrefs)
-            - "quiet": Quiet list (addresses only)
-            - "size_sum": Sum of all function sizes
-            - "count": Count of functions only
+            - "standard": Address, size, name (default)
+            - "verbose": Includes signature, locals, xrefs
+            - "quiet": Addresses only
+            - "size_sum": Total size of all functions
+            - "count": Number of functions only
         sort: Sort order
-            - "none": No specific sort
-            - "address": Sort by address
-            - "size": Sort by size
-            - "name": Sort by name
+            - "none": No sorting (default)
+            - "address": By address
+            - "size": By size
+            - "name": Alphabetically
     """
     format_map = {
         "standard": "",
@@ -87,15 +119,24 @@ async def decompile(
 ) -> str:
     """Decompile a function to pseudo-C code.
 
-    Produces higher-level representation than disassembly, showing control
-    structures, variable usage, and function calls in C-like syntax.
+    Produces readable C-like code showing control flow, variables, and calls.
+    Higher-level than disassembly.
+
+    When to Use:
+    - To understand what a function does
+    - To analyze algorithm logic or control flow
+    - When you have a function address from list_functions
+
+    When NOT to Use:
+    - Do NOT guess addresses - use list_functions to find valid addresses first
+    - Do NOT call analyze() before this - decompile works on analyzed functions
 
     Args:
         address: Function address or name (e.g., "main", "0x401000", "sym.main")
         style: Output style
-            - "basic": Basic pseudo-C output
-            - "annotated": Include C helper annotations and type info
-            - "offsets": Include address offsets as comments
+            - "basic": Standard pseudo-C (default)
+            - "annotated": With type annotations
+            - "offsets": With address comments
     """
     modifier = {"basic": "", "annotated": "c", "offsets": "o"}[style]
     return await r2(f"pdc{modifier} @ {address}")
@@ -107,14 +148,19 @@ async def list_strings(
 ) -> str:
     """List strings found in the binary.
 
-    Essential for finding hardcoded messages, paths, URLs, API names,
-    and other text artifacts.
+    Finds hardcoded text: messages, paths, URLs, API names, format strings.
+    Does NOT require analyze() - reads string data directly.
+
+    When to Use:
+    - To find interesting strings for reverse engineering
+    - To locate error messages, URLs, or file paths
+    - To understand what the binary might do
 
     Args:
-        scope: Search scope and output format
-            - "data": Search data sections only (faster, standard approach)
-            - "all": Search entire binary including code sections
-            - "quiet": Simplified output with address and string only
+        scope: Search scope
+            - "data": Data sections only (default, faster)
+            - "all": Entire binary including code
+            - "quiet": Simplified output (address + string)
     """
     modifier = {"data": "", "all": "z", "quiet": "q"}[scope]
     return await r2(f"iz{modifier}")
