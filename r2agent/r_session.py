@@ -1,13 +1,14 @@
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from agents import SQLiteSession, function_tool
 from pydantic import BaseModel, Field
 
-from .r_agent import RAgent
+from .r_agent import RAgent, StreamEvent, convert_sdk_event
 
 if TYPE_CHECKING:
     from agents import Tool
+    from agents.agent import AgentToolStreamEvent
 
 
 class AgentTaskInput(BaseModel):
@@ -26,6 +27,7 @@ class RSession:
         self._orchestrator_tools: list["Tool"] = []
         self._subagents: list[RAgent] = []
         self._orchestrator: RAgent | None = None
+        self._on_stream_callback: Callable[[StreamEvent], Awaitable[None]] | None = None
 
         self._setup_default_tools()
 
@@ -64,6 +66,11 @@ class RSession:
     def session_id(self) -> str:
         return self._session.session_id
 
+    def set_on_stream_callback(
+        self, callback: Callable[[StreamEvent], Awaitable[None]] | None
+    ) -> None:
+        self._on_stream_callback = callback
+
     def add_tool(self, tool: "Tool") -> None:
         if tool is None:
             raise ValueError("Tool cannot be None")
@@ -93,10 +100,28 @@ class RSession:
         )
         self._subagents.append(subagent)
 
+        async def on_stream_wrapper(event: "AgentToolStreamEvent") -> None:
+            if self._on_stream_callback is None:
+                return
+
+            sdk_event = event["event"]
+
+            if sdk_event.type == "agent_updated_stream_event":
+                await self._on_stream_callback(
+                    StreamEvent(
+                        type="agent_start", data={"name": sdk_event.new_agent.name}
+                    )
+                )
+            else:
+                converted = convert_sdk_event(sdk_event)
+                if converted:
+                    await self._on_stream_callback(converted)
+
         return subagent.as_tool(
             name=f"{name.lower().replace(' ', '_')}_tool",
             description=f"Delegate tasks to {name}. {instructions}",
             parameters=AgentTaskInput,
+            on_stream=on_stream_wrapper,
         )
 
     def create_handoff_agent(

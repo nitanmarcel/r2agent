@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import get_config
+from .r_agent import StreamEvent
 from .r_session import RSession
 from .tools import BUILTIN_TOOLS, clear_ipc_callback, r2cmd, set_ipc_callback
 
@@ -132,6 +133,19 @@ class R2AgentServer:
                     set_ipc_callback(ipc_callback)
 
                     session = self._create_session()
+
+                    async def on_subagent_event(event: StreamEvent) -> None:
+                        await self._send_message(
+                            writer,
+                            {
+                                "jsonrpc": "2.0",
+                                "method": "stream",
+                                "params": {"type": event.type, "data": event.data},
+                            },
+                        )
+
+                    session.set_on_stream_callback(on_subagent_event)
+
                     full_text = []
                     cancel_event = asyncio.Event()
 

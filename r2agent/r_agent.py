@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, AsyncIterator, Literal
+from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Literal
 
 from agents import Agent, ModelSettings, RunConfig, Runner
 from agents.extensions.models.litellm_model import LitellmModel
@@ -12,6 +12,9 @@ from .config import get_config
 
 if TYPE_CHECKING:
     from agents import Handoff, Session, Tool
+    from agents.agent import AgentToolStreamEvent
+
+OnStreamCallback = Callable[["AgentToolStreamEvent"], Awaitable[None]]
 
 
 @dataclass
@@ -20,6 +23,39 @@ class StreamEvent:
         "text_delta", "tool_call", "tool_output", "agent_start", "agent_end", "message"
     ]
     data: dict
+
+
+def convert_sdk_event(sdk_event: Any) -> StreamEvent | None:
+    if sdk_event.type == "raw_response_event":
+        if isinstance(sdk_event.data, ResponseTextDeltaEvent):
+            return StreamEvent(type="text_delta", data={"delta": sdk_event.data.delta})
+
+    elif sdk_event.type == "run_item_stream_event":
+        if sdk_event.item.type == "tool_call_item":
+            args = sdk_event.item.raw_item.arguments
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args) if args else {}
+                except json.JSONDecodeError:
+                    args = {}
+            return StreamEvent(
+                type="tool_call",
+                data={"name": sdk_event.item.raw_item.name, "args": args},
+            )
+
+        elif sdk_event.item.type == "tool_call_output_item":
+            return StreamEvent(
+                type="tool_output",
+                data={
+                    "name": getattr(sdk_event.item, "name", "unknown"),
+                    "output": str(sdk_event.item.output)[:500],
+                },
+            )
+
+        elif sdk_event.item.type == "message_output_item":
+            pass
+
+    return None
 
 
 class CancellableStream:
@@ -45,43 +81,16 @@ class CancellableStream:
             if self._cancelled:
                 break
 
-            if event.type == "raw_response_event":
-                if isinstance(event.data, ResponseTextDeltaEvent):
-                    yield StreamEvent(
-                        type="text_delta", data={"delta": event.data.delta}
-                    )
-
-            elif event.type == "agent_updated_stream_event":
+            if event.type == "agent_updated_stream_event":
                 new_name = event.new_agent.name
                 if new_name != current_agent:
                     yield StreamEvent(type="agent_end", data={"name": current_agent})
                     yield StreamEvent(type="agent_start", data={"name": new_name})
                     current_agent = new_name
-
-            elif event.type == "run_item_stream_event":
-                if event.item.type == "tool_call_item":
-                    args = event.item.raw_item.arguments
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args) if args else {}
-                        except json.JSONDecodeError:
-                            args = {}
-                    yield StreamEvent(
-                        type="tool_call",
-                        data={"name": event.item.raw_item.name, "args": args},
-                    )
-
-                elif event.item.type == "tool_call_output_item":
-                    yield StreamEvent(
-                        type="tool_output",
-                        data={
-                            "name": getattr(event.item, "name", "unknown"),
-                            "output": str(event.item.output)[:500],
-                        },
-                    )
-
-                elif event.item.type == "message_output_item":
-                    pass
+            else:
+                converted = convert_sdk_event(event)
+                if converted:
+                    yield converted
 
         yield StreamEvent(type="agent_end", data={"name": current_agent})
 
@@ -167,6 +176,7 @@ class RAgent:
         name: str,
         description: str,
         parameters: type | None = None,
+        on_stream: OnStreamCallback | None = None,
     ) -> "Tool":
         if not name:
             raise ValueError("Tool name is required")
@@ -180,5 +190,7 @@ class RAgent:
         }
         if parameters is not None:
             kwargs["parameters"] = parameters
+        if on_stream is not None:
+            kwargs["on_stream"] = on_stream
 
         return self._agent.as_tool(**kwargs)
