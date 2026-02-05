@@ -36,8 +36,14 @@ async def analyze(
             - "aaa": Extended (adds auto-naming)
             - "aaaa": Deep (slowest, maximum detail)
     """
-    result = await r2(level)
-    return result if result else "Analysis complete"
+    await r2(level)
+    level_desc = {
+        "a": "basic",
+        "aa": "standard",
+        "aaa": "extended",
+        "aaaa": "deep",
+    }
+    return f"Analysis complete ({level_desc[level]}). Functions and symbols are now available."
 
 
 @function_tool
@@ -61,15 +67,17 @@ async def binary_info(
             - "json": Machine-readable format
     """
     modifier = {"summary": "", "detailed": "I", "json": "j"}[detail]
-    cmd = f"i{modifier}"
-    result = await r2(cmd)
+    result = await r2(f"i{modifier}")
+
+    if not result or not result.strip():
+        return "No binary info available. Is a file opened?"
+
     return result
 
 
 @function_tool
 async def list_functions(
     format: Literal["standard", "verbose", "quiet", "size_sum", "count"] = "standard",
-    sort: Literal["none", "address", "size", "name"] = "none",
 ) -> str:
     """List all functions discovered in the binary.
 
@@ -85,8 +93,8 @@ async def list_functions(
     - Do NOT call analyze() before this - just call list_functions directly
     - If you need function code, use decompile() instead
 
-    NOTE: If this returns empty results and you haven't analyzed yet, THEN
-    call analyze() once. But try this tool first.
+    NOTE: If this returns "No functions found", you need to run analyze() first.
+    But always try this tool first before running analysis.
 
     Args:
         format: Output format
@@ -95,11 +103,6 @@ async def list_functions(
             - "quiet": Addresses only
             - "size_sum": Total size of all functions
             - "count": Number of functions only
-        sort: Sort order
-            - "none": No sorting (default)
-            - "address": By address
-            - "size": By size
-            - "name": Alphabetically
     """
     format_map = {
         "standard": "",
@@ -108,8 +111,12 @@ async def list_functions(
         "size_sum": "+",
         "count": "c",
     }
-    sort_map = {"none": "", "address": "sa", "size": "ss", "name": "sn"}
-    return await r2(f"afl{format_map[format]}{sort_map[sort]}")
+    result = await r2(f"afl{format_map[format]}")
+
+    if not result or not result.strip():
+        return "No functions found. The binary may not be analyzed yet. Run analyze() first."
+
+    return result
 
 
 @function_tool
@@ -132,14 +139,19 @@ async def decompile(
     - Do NOT call analyze() before this - decompile works on analyzed functions
 
     Args:
-        address: Function address or name (e.g., "main", "0x401000", "sym.main")
+        address: Function address or name (e.g., "main", "0x401000", "sym.main", "entry0")
         style: Output style
             - "basic": Standard pseudo-C (default)
             - "annotated": With type annotations
             - "offsets": With address comments
     """
     modifier = {"basic": "", "annotated": "c", "offsets": "o"}[style]
-    return await r2(f"pdc{modifier} @ {address}")
+    result = await r2(f"pdc{modifier} @ {address}")
+
+    if not result or not result.strip():
+        return f"No code found at address '{address}'. Check that the address is valid using list_functions."
+
+    return result
 
 
 @function_tool
@@ -163,4 +175,9 @@ async def list_strings(
             - "quiet": Simplified output (address + string)
     """
     modifier = {"data": "", "all": "z", "quiet": "q"}[scope]
-    return await r2(f"iz{modifier}")
+    result = await r2(f"iz{modifier}")
+
+    if not result or not result.strip():
+        return "No strings found in the binary."
+
+    return result

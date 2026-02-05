@@ -20,6 +20,7 @@ r2agent = "r2agent.__main__:main"
 
 [tool.poetry]
 packages = [{include = "r2agent"}]
+include = ["r2agent/prompts/*.txt"]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

@@ -177,6 +177,7 @@ class RAgent:
         description: str,
         parameters: type | None = None,
         on_stream: OnStreamCallback | None = None,
+        max_turns: int | None = None,
     ) -> "Tool":
         if not name:
             raise ValueError("Tool name is required")
@@ -192,5 +193,7 @@ class RAgent:
             kwargs["parameters"] = parameters
         if on_stream is not None:
             kwargs["on_stream"] = on_stream
+        if max_turns is not None:
+            kwargs["max_turns"] = max_turns
 
         return self._agent.as_tool(**kwargs)

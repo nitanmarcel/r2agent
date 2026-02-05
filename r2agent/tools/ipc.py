@@ -23,7 +23,7 @@ async def r2(command: str) -> str:
     if _ipc_callback is None:
         return "Error: IPC not connected"
     result = await _ipc_callback("r2cmd", {"command": command})
-    return result if result else "(command executed)"
+    return result if result is not None else ""
 
 
 def ipc_tool(func):
