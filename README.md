@@ -2,6 +2,8 @@
 
 AI-powered reverse engineering assistant for radare2.
 
+> **Note:** Currently only Linux and macOS are supported. Windows support is planned for a future release.
+
 ## Installation
 
 ### 1. Install r2agent
@@ -54,6 +56,7 @@ Inside radare2:
 
 - `r2a <prompt>` - Ask the AI a question
 - `r2a?` - Show help
+- `r2av` - Show version info
 - `r2as` - Check server status
 - `r2aS` - Start server
 - `r2a-` - Stop server
