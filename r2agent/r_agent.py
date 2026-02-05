@@ -166,13 +166,18 @@ class RAgent:
         self,
         name: str,
         description: str,
+        parameters: type | None = None,
     ) -> "Tool":
         if not name:
             raise ValueError("Tool name is required")
         if not description:
             raise ValueError("Tool description is required")
 
-        return self._agent.as_tool(
-            tool_name=name,
-            tool_description=description,
-        )
+        kwargs: dict = {
+            "tool_name": name,
+            "tool_description": description,
+        }
+        if parameters is not None:
+            kwargs["parameters"] = parameters
+
+        return self._agent.as_tool(**kwargs)

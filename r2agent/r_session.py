@@ -2,11 +2,16 @@ import uuid
 from typing import TYPE_CHECKING
 
 from agents import SQLiteSession, function_tool
+from pydantic import BaseModel, Field
 
 from .r_agent import RAgent
 
 if TYPE_CHECKING:
     from agents import Tool
+
+
+class AgentTaskInput(BaseModel):
+    task: str = Field(description="The task to perform, described in natural language.")
 
 
 class RSession:
@@ -25,70 +30,27 @@ class RSession:
         self._setup_default_tools()
 
     def _setup_default_tools(self) -> None:
-        general_tool = self.create_subagent(
-            name="general",
+        worker_tool = self.create_subagent(
+            name="r2worker",
             instructions=(
-                "You are a general-purpose assistant for complex questions and multi-step tasks.\n\n"
-                "Guidelines:\n"
-                "- Break down complex problems into steps\n"
-                "- Research thoroughly before answering\n"
-                "- Be concise and direct in your responses\n"
-                "- Use available tools as needed"
+                "You are a radare2 expert. Use your tools to complete the given task.\n"
+                "Only call the tools needed for the specific task. Do not repeat tool calls."
             ),
             tools=self._extra_tools,
         )
-        self._orchestrator_tools.append(general_tool)
-
-        explore_tool = self.create_subagent(
-            name="explore",
-            instructions=(
-                "You are a binary exploration specialist. You excel at quickly finding things in binaries.\n\n"
-                "Your strengths:\n"
-                "- Finding functions, strings, and symbols\n"
-                "- Searching with patterns and filters\n"
-                "- Navigating binary structures\n\n"
-                "Guidelines:\n"
-                "- Be fast and efficient\n"
-                "- Return clear, structured results\n"
-                "- Adapt search approach based on thoroughness level specified by caller\n"
-                "- Complete the search request and report findings clearly"
-            ),
-            tools=self._extra_tools,
-        )
-        self._orchestrator_tools.append(explore_tool)
+        self._orchestrator_tools.append(worker_tool)
 
     def _create_orchestrator(self) -> RAgent:
         return RAgent(
             name="Orchestrator",
             instructions=(
-                "You are r2agent, an expert reverse engineering assistant running INSIDE radare2.\n\n"
-                "# Context\n"
-                "- You are running as a plugin inside an active radare2 session\n"
-                "- A binary is ALREADY LOADED in the current session\n"
-                "- The user is interacting with you from the r2 command prompt\n"
-                "- Use your available tools to inspect and analyze the binary\n\n"
-                "# Communication\n"
-                "- Be concise and direct - avoid unnecessary preamble\n"
-                "- When you run a command, briefly explain what you're doing\n"
-                "- When analyzing code, explain what it does in plain terms\n\n"
-                "# Workflow\n"
-                "- When asked about 'this binary' or 'this function', use your tools to inspect it\n"
-                "- If analysis seems incomplete, suggest the user run 'aaa' first\n\n"
-                "# Examples\n"
-                "<example>\n"
-                "user: analyze this binary\n"
-                "assistant: Let me get information about this binary.\n"
-                "[uses tools to inspect]\n"
-                "This is a 64-bit ELF executable. Here are the main functions...\n"
-                "</example>\n\n"
-                "<example>\n"
-                "user: what does this function do?\n"
-                "assistant: Let me decompile the current function.\n"
-                "[uses tools]\n"
-                "This function validates user input by...\n"
-                "</example>"
+                "You are r2agent, a reverse engineering assistant inside radare2.\n\n"
+                "A binary is already loaded. Use r2worker_tool to handle user requests.\n"
+                "Pass the user's request as-is to the worker.\n\n"
+                "IMPORTANT: Tool outputs are from your tools, not the user. "
+                "Do not thank or acknowledge tool outputs. Just use them to answer the user."
             ),
-            tools=self._extra_tools + self._orchestrator_tools,
+            tools=self._orchestrator_tools,
             session=self._session,
         )
 
@@ -134,6 +96,7 @@ class RSession:
         return subagent.as_tool(
             name=f"{name.lower().replace(' ', '_')}_tool",
             description=f"Delegate tasks to {name}. {instructions}",
+            parameters=AgentTaskInput,
         )
 
     def create_handoff_agent(

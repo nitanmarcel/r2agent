@@ -10,7 +10,7 @@ from typing import Any
 
 from .config import get_config
 from .r_session import RSession
-from .tools import clear_ipc_callback, r2cmd, set_ipc_callback
+from .tools import BUILTIN_TOOLS, clear_ipc_callback, r2cmd, set_ipc_callback
 
 logger = logging.getLogger("r2agent.server")
 
@@ -33,10 +33,10 @@ class R2AgentServer:
         self._running = False
 
     def _create_session(self) -> RSession:
-        extra_tools = []
+        extra_tools = list(BUILTIN_TOOLS)
         if self.config.allow_r2cmd:
             extra_tools.append(r2cmd)
-        return RSession(extra_tools=extra_tools if extra_tools else None)
+        return RSession(extra_tools=extra_tools)
 
     async def _send_message(self, writer: asyncio.StreamWriter, message: dict):
         data = json.dumps(message).encode("utf-8")
@@ -105,6 +105,10 @@ class R2AgentServer:
                         tool_call_id += 1
                         call_id = str(tool_call_id)
 
+                        logger.debug(
+                            f"IPC callback invoked: name={name}, args={args}, call_id={call_id}"
+                        )
+
                         await self._send_message(
                             writer,
                             {
@@ -118,7 +122,11 @@ class R2AgentServer:
                             },
                         )
 
+                        logger.debug(f"IPC message sent, waiting for result...")
                         result = await tool_queue.get()
+                        logger.debug(
+                            f"IPC got result: {result[:100] if result else '(empty)'}..."
+                        )
                         return result
 
                     set_ipc_callback(ipc_callback)

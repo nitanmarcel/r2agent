@@ -144,7 +144,6 @@ def _ask(prompt):
                         buffer = buffer[end + 1 :]
 
                         if marker.startswith("TOOL:"):
-                            # Format: TOOL:id:name:json_args
                             parts = marker[5:].split(":", 2)
                             if len(parts) >= 3:
                                 call_id, name, args_json = parts
@@ -155,7 +154,6 @@ def _ask(prompt):
                                 except Exception:
                                     args = {}
 
-                                # Handle tool by name
                                 if name == "r2cmd":
                                     command = args.get("command", "")
                                     try:
@@ -166,7 +164,12 @@ def _ask(prompt):
                                 else:
                                     result = f"Unknown tool: {name}"
 
-                                proc.stdin.write((result + "\n").encode("utf-8"))
+                                result_bytes = result.encode("utf-8")
+                                proc.stdin.write(
+                                    f"{len(result_bytes)}\n".encode("utf-8")
+                                )
+                                proc.stdin.write(result_bytes)
+                                proc.stdin.write(b"\n")
                                 proc.stdin.flush()
 
                         elif marker.startswith("ERROR:"):
@@ -256,7 +259,6 @@ def r2agent_plugin(a):
     def _call(cmd):
         cmd = cmd.strip()
 
-        # Strict matching: only r2a, r2a?, r2as, r2aS, r2a-, r2a <prompt>
         if (
             cmd == "r2a"
             or cmd == "r2a?"
@@ -273,13 +275,11 @@ def r2agent_plugin(a):
         sys.stdout.flush()
 
         try:
-            # Parse command: r2a, r2a?, r2as, r2aS, r2a-, r2a <prompt>
             if cmd == "r2a?" or cmd == "r2a":
                 print(_show_help(), flush=True)
                 return 1
 
             if cmd == "r2as":
-                # Server status
                 if _ping_server():
                     print("Server is running", flush=True)
                 else:
@@ -287,7 +287,6 @@ def r2agent_plugin(a):
                 return 1
 
             if cmd == "r2aS":
-                # Start server
                 if _ping_server():
                     print("Server is already running", flush=True)
                 else:
@@ -298,16 +297,13 @@ def r2agent_plugin(a):
                 return 1
 
             if cmd == "r2a-":
-                # Stop server
                 success, msg = _stop_server()
                 print(msg, flush=True)
                 return 1
 
-            # Must be r2a <prompt> - extract prompt after "r2a "
             if cmd.startswith("r2a "):
                 prompt = cmd[4:].strip()
             else:
-                # Unknown subcommand
                 print(_show_help(), flush=True)
                 return 1
 

@@ -59,7 +59,15 @@ def run_streaming(prompt):
                 name = params.get("name", "")
                 args = params.get("args", {})
                 print(f"\x00TOOL:{call_id}:{name}:{json.dumps(args)}\x00", flush=True)
-                response = sys.stdin.readline().strip()
+
+                length_line = sys.stdin.readline().strip()
+                try:
+                    length = int(length_line)
+                    response = sys.stdin.read(length)
+                    sys.stdin.readline()
+                except (ValueError, IOError):
+                    response = ""
+
                 _send_message(
                     sock,
                     {
