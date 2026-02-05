@@ -13,6 +13,8 @@ except ImportError:
     _HAS_R2LANG = False
     r2lang = None
 
+_VERSION = "0.2.0"
+
 _UID = os.getuid()
 _SOCKET_PATH = f"/tmp/r2agent-{_UID}.sock"
 _PID_PATH = f"/tmp/r2agent-{_UID}.pid"
@@ -57,6 +59,43 @@ def _ping_server():
         return False
 
 
+def _get_server_version():
+    import json
+    import socket
+    import struct
+
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(2)
+        sock.connect(_SOCKET_PATH)
+
+        request = {"jsonrpc": "2.0", "method": "get_version", "id": 1}
+        data = json.dumps(request).encode("utf-8")
+        sock.sendall(struct.pack(">I", len(data)))
+        sock.sendall(data)
+
+        length_data = b""
+        while len(length_data) < 4:
+            chunk = sock.recv(4 - len(length_data))
+            if not chunk:
+                return None
+            length_data += chunk
+        length = struct.unpack(">I", length_data)[0]
+
+        response_data = b""
+        while len(response_data) < length:
+            chunk = sock.recv(length - len(response_data))
+            if not chunk:
+                return None
+            response_data += chunk
+
+        response = json.loads(response_data.decode("utf-8"))
+        sock.close()
+        return response.get("result")
+    except Exception:
+        return None
+
+
 def _start_server():
     try:
         subprocess.Popen(
@@ -73,6 +112,7 @@ def _start_server():
 
 def _ensure_server():
     if _ping_server():
+        _check_version_mismatch()
         return True
 
     print("[r2agent] Server not running, starting...")
@@ -83,11 +123,22 @@ def _ensure_server():
     while time.time() - start_time < _STARTUP_TIMEOUT:
         if _ping_server():
             print("[r2agent] Server started")
+            _check_version_mismatch()
             return True
         time.sleep(_STARTUP_CHECK_INTERVAL)
 
     print("[r2agent] Server failed to start (timeout)")
     return False
+
+
+def _check_version_mismatch():
+    server_version = _get_server_version()
+
+    if server_version != _VERSION:
+        print(
+            f"[r2agent] Warning: Version mismatch - plugin={_VERSION}, server={server_version}"
+        )
+        print("[r2agent] Consider restarting the server: r2a- && r2aS")
 
 
 def _ask(prompt):
@@ -243,10 +294,11 @@ def _stop_server():
 def _show_help():
     """Return help message."""
     return (
-        "Usage: r2a[?sSq-] [prompt]\n"
+        "Usage: r2a[?vsSq-] [prompt]\n"
         "\n"
         "| r2a <prompt>   ask the AI a question\n"
         "| r2a?           show this help\n"
+        "| r2av           show version info\n"
         "| r2as           check server status\n"
         "| r2aS           start server\n"
         "| r2a-           stop server\n"
@@ -262,6 +314,7 @@ def r2agent_plugin(a):
         if (
             cmd == "r2a"
             or cmd == "r2a?"
+            or cmd == "r2av"
             or cmd == "r2as"
             or cmd == "r2aS"
             or cmd == "r2a-"
@@ -277,6 +330,19 @@ def r2agent_plugin(a):
         try:
             if cmd == "r2a?" or cmd == "r2a":
                 print(_show_help(), flush=True)
+                return 1
+
+            if cmd == "r2av":
+                server_version = _get_server_version() if _ping_server() else None
+                print(f"Plugin version: {_VERSION}", flush=True)
+                if server_version:
+                    print(f"Server version: {server_version}", flush=True)
+                    if server_version != _VERSION:
+                        print("Warning: Version mismatch!", flush=True)
+                else:
+                    print(
+                        "Server version: not available (server not running)", flush=True
+                    )
                 return 1
 
             if cmd == "r2as":

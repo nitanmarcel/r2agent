@@ -5,6 +5,7 @@ import os
 import signal
 import struct
 import sys
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,8 @@ from .r_session import RSession
 from .tools import BUILTIN_TOOLS, clear_ipc_callback, r2cmd, set_ipc_callback
 
 logger = logging.getLogger("r2agent.server")
+
+__version__ = version("r2agent")
 
 
 class JSONRPCError(Exception):
@@ -55,6 +58,8 @@ class R2AgentServer:
         try:
             if method == "ping":
                 result = "pong"
+            elif method == "get_version":
+                result = __version__
             else:
                 raise JSONRPCError(-32601, f"Method not found: {method}")
 
