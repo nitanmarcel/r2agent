@@ -11,8 +11,12 @@ dependencies = [
     "openai-agents[litellm] (>=0.7.0,<0.8.0)",
     "pydantic (>=2.0.0)",
     "appdirs (>=1.4.4)",
-    "pyyaml (>=6.0.0)"
+    "pyyaml (>=6.0.0)",
+    "r2pipe (>=1.9.4)"
 ]
+
+[project.scripts]
+r2agent = "r2agent.__main__:main"
 
 [tool.poetry]
 packages = [{include = "r2agent"}]

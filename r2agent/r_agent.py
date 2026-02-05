@@ -1,15 +1,89 @@
 import json
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, AsyncIterator, Literal
 
 from agents import Agent, ModelSettings, RunConfig, Runner
 from agents.extensions.models.litellm_model import LitellmModel
 from agents.extensions.models.litellm_provider import LitellmProvider
+from agents.result import RunResultStreaming
 from openai.types.responses import ResponseTextDeltaEvent
 
 from .config import get_config
 
 if TYPE_CHECKING:
     from agents import Handoff, Session, Tool
+
+
+@dataclass
+class StreamEvent:
+    type: Literal[
+        "text_delta", "tool_call", "tool_output", "agent_start", "agent_end", "message"
+    ]
+    data: dict
+
+
+class CancellableStream:
+    def __init__(self, stream: RunResultStreaming, agent_name: str) -> None:
+        self._stream = stream
+        self._agent_name = agent_name
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+        self._stream.cancel()
+
+    @property
+    def is_complete(self) -> bool:
+        return self._stream.is_complete
+
+    async def stream_events(self) -> AsyncIterator[StreamEvent]:
+        yield StreamEvent(type="agent_start", data={"name": self._agent_name})
+
+        current_agent = self._agent_name
+
+        async for event in self._stream.stream_events():
+            if self._cancelled:
+                break
+
+            if event.type == "raw_response_event":
+                if isinstance(event.data, ResponseTextDeltaEvent):
+                    yield StreamEvent(
+                        type="text_delta", data={"delta": event.data.delta}
+                    )
+
+            elif event.type == "agent_updated_stream_event":
+                new_name = event.new_agent.name
+                if new_name != current_agent:
+                    yield StreamEvent(type="agent_end", data={"name": current_agent})
+                    yield StreamEvent(type="agent_start", data={"name": new_name})
+                    current_agent = new_name
+
+            elif event.type == "run_item_stream_event":
+                if event.item.type == "tool_call_item":
+                    args = event.item.raw_item.arguments
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args) if args else {}
+                        except json.JSONDecodeError:
+                            args = {}
+                    yield StreamEvent(
+                        type="tool_call",
+                        data={"name": event.item.raw_item.name, "args": args},
+                    )
+
+                elif event.item.type == "tool_call_output_item":
+                    yield StreamEvent(
+                        type="tool_output",
+                        data={
+                            "name": getattr(event.item, "name", "unknown"),
+                            "output": str(event.item.output)[:500],
+                        },
+                    )
+
+                elif event.item.type == "message_output_item":
+                    pass
+
+        yield StreamEvent(type="agent_end", data={"name": current_agent})
 
 
 def create_litellm_model(provider_name: str | None = None) -> LitellmModel:
@@ -75,7 +149,7 @@ class RAgent:
         )
         return result.final_output
 
-    async def ask_stream(self, message: str) -> str:
+    def ask_stream(self, message: str) -> CancellableStream:
         if not message.strip():
             raise ValueError("Message cannot be empty")
 
@@ -86,25 +160,7 @@ class RAgent:
             run_config=self._run_config,
         )
 
-        async for event in stream.stream_events():
-            if event.type == "raw_response_event":
-                if isinstance(event.data, ResponseTextDeltaEvent):
-                    print(event.data.delta, end="", flush=True)
-            elif event.type == "run_item_stream_event":
-                if event.item.type == "tool_call_item":
-                    args = event.item.raw_item.arguments
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args) if args else {}
-                        except json.JSONDecodeError:
-                            args = {}
-                    args_str = (
-                        ", ".join(f"{k}={v}" for k, v in args.items()) if args else ""
-                    )
-                    print(f"\n{event.item.raw_item.name} [{args_str}]")
-
-        print()
-        return stream.final_output
+        return CancellableStream(stream, self._agent.name)
 
     def as_tool(
         self,

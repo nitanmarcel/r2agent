@@ -10,10 +10,15 @@ if TYPE_CHECKING:
 
 
 class RSession:
-    def __init__(self, session_id: str | None = None) -> None:
+    def __init__(
+        self,
+        session_id: str | None = None,
+        extra_tools: list["Tool"] | None = None,
+    ) -> None:
         resolved_session_id = session_id or str(uuid.uuid4())
         self._session = SQLiteSession(resolved_session_id)
-        self._tools: list["Tool"] = []
+        self._extra_tools: list["Tool"] = extra_tools or []
+        self._orchestrator_tools: list["Tool"] = []
         self._subagents: list[RAgent] = []
         self._orchestrator: RAgent | None = None
 
@@ -30,8 +35,9 @@ class RSession:
                 "- Be concise and direct in your responses\n"
                 "- Use available tools as needed"
             ),
+            tools=self._extra_tools,
         )
-        self.add_tool(general_tool)
+        self._orchestrator_tools.append(general_tool)
 
         explore_tool = self.create_subagent(
             name="explore",
@@ -47,38 +53,42 @@ class RSession:
                 "- Adapt search approach based on thoroughness level specified by caller\n"
                 "- Complete the search request and report findings clearly"
             ),
+            tools=self._extra_tools,
         )
-        self.add_tool(explore_tool)
+        self._orchestrator_tools.append(explore_tool)
 
     def _create_orchestrator(self) -> RAgent:
         return RAgent(
             name="Orchestrator",
             instructions=(
-                "You are r2agent, an expert reverse engineering assistant powered by radare2.\n\n"
-                "You help users analyze binaries, understand code, and solve reverse engineering challenges.\n\n"
+                "You are r2agent, an expert reverse engineering assistant running INSIDE radare2.\n\n"
+                "# Context\n"
+                "- You are running as a plugin inside an active radare2 session\n"
+                "- A binary is ALREADY LOADED in the current session\n"
+                "- The user is interacting with you from the r2 command prompt\n"
+                "- Use your available tools to inspect and analyze the binary\n\n"
                 "# Communication\n"
-                "- Output text to communicate with the user; all text you output outside of tool use is displayed to the user\n"
-                "- When you run a command or tool, briefly explain what you're doing and why\n"
                 "- Be concise and direct - avoid unnecessary preamble\n"
-                "- When decompiling or analyzing code, explain what it does in plain terms\n\n"
+                "- When you run a command, briefly explain what you're doing\n"
+                "- When analyzing code, explain what it does in plain terms\n\n"
                 "# Workflow\n"
-                "- Think step by step before answering complex questions\n"
-                "- Use your radare2 tools to inspect binaries when needed\n"
-                "- If unsure, analyze more before guessing\n"
-                "- Not every question needs a tool - be conversational when appropriate\n\n"
+                "- When asked about 'this binary' or 'this function', use your tools to inspect it\n"
+                "- If analysis seems incomplete, suggest the user run 'aaa' first\n\n"
                 "# Examples\n"
                 "<example>\n"
-                "user: what does this function do?\n"
-                "assistant: Let me decompile the function to analyze it.\n"
-                "[uses decompile tool]\n"
-                "This function checks if a user is authenticated by comparing the input password hash with the stored hash.\n"
+                "user: analyze this binary\n"
+                "assistant: Let me get information about this binary.\n"
+                "[uses tools to inspect]\n"
+                "This is a 64-bit ELF executable. Here are the main functions...\n"
                 "</example>\n\n"
                 "<example>\n"
-                "user: hello\n"
-                "assistant: Hello! I'm ready to help you analyze binaries. Do you have a file loaded, or would you like me to help with something else?\n"
+                "user: what does this function do?\n"
+                "assistant: Let me decompile the current function.\n"
+                "[uses tools]\n"
+                "This function validates user input by...\n"
                 "</example>"
             ),
-            tools=self._tools,
+            tools=self._extra_tools + self._orchestrator_tools,
             session=self._session,
         )
 
@@ -100,7 +110,7 @@ class RSession:
                 "Cannot add tools after orchestrator has been created. "
                 "Add all tools before accessing main_agent."
             )
-        self._tools.append(tool)
+        self._orchestrator_tools.append(tool)
 
     def create_subagent(
         self,
