@@ -176,6 +176,7 @@ class RAgent:
         kwargs: dict = {
             "tool_name": name,
             "tool_description": description,
+            "session": self._session,
         }
         if parameters is not None:
             kwargs["parameters"] = parameters
