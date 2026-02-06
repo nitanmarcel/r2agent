@@ -71,7 +71,6 @@ class RSession:
     def _create_on_stream_wrapper(
         self, agent_name: str
     ) -> Callable[["AgentToolStreamEvent"], Awaitable[None]]:
-
         async def on_stream_wrapper(event: "AgentToolStreamEvent") -> None:
             if self._on_stream_callback is None:
                 return

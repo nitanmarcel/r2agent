@@ -8,64 +8,26 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
-    serve_parser = subparsers.add_parser("serve", help="Run the server in foreground")
-    serve_parser.add_argument(
-        "--debug", "-d", action="store_true", help="Enable debug logging"
+    stdio_parser = subparsers.add_parser(
+        "stdio", help="Run in stdio mode (for r2plugin integration)"
     )
-    start_parser = subparsers.add_parser(
-        "start", help="Start the server as a background daemon"
+    stdio_parser.add_argument(
+        "--debug", "-d", action="store_true", help="Enable debug logging to stderr"
     )
-    start_parser.add_argument(
-        "--debug", "-d", action="store_true", help="Enable debug logging"
+    stdio_parser.add_argument(
+        "--timeout",
+        "-t",
+        type=float,
+        default=None,
+        help="Read timeout in seconds (default: no timeout)",
     )
-    subparsers.add_parser("stop", help="Stop the server daemon")
-    subparsers.add_parser("status", help="Check if the server is running")
-
-    r2pipe_parser = subparsers.add_parser("r2pipe", help=argparse.SUPPRESS)
-    r2pipe_parser.add_argument("prompt", nargs="*", help="Prompt to send")
 
     args = parser.parse_args()
 
-    if args.command == "serve":
-        from .server import run_server
+    if args.command == "stdio":
+        from .stdio_server import run_stdio
 
-        run_server(foreground=True, debug=args.debug)
-
-    elif args.command == "start":
-        from .server import run_server, server_status
-
-        if server_status():
-            print("Server is already running")
-            sys.exit(0)
-        print("Starting r2agent server...")
-        run_server(foreground=False, debug=args.debug)
-
-    elif args.command == "stop":
-        from .server import stop_server
-
-        if stop_server():
-            print("Server stopped")
-        else:
-            sys.exit(1)
-
-    elif args.command == "status":
-        from .config import get_config
-        from .server import server_status
-
-        config = get_config()
-        if server_status():
-            print(f"Server is running (socket: {config.server.get_socket_path()})")
-            sys.exit(0)
-        else:
-            print("Server is not running")
-            sys.exit(1)
-
-    elif args.command == "r2pipe":
-        from .r2pipe_wrapper import main as r2pipe_main
-
-        prompt = " ".join(args.prompt) if args.prompt else ""
-        sys.argv = ["r2agent", prompt]
-        r2pipe_main()
+        run_stdio(debug=args.debug, timeout=args.timeout)
 
     else:
         parser.print_help()

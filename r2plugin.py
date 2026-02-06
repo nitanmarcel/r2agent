@@ -1,9 +1,10 @@
-import fcntl
+import json
 import os
-import select
+import queue
+import signal
 import subprocess
 import sys
-import time
+import threading
 
 try:
     import r2lang
@@ -13,297 +14,343 @@ except ImportError:
     _HAS_R2LANG = False
     r2lang = None
 
-_VERSION = "0.2.0"
+_VERSION = "0.3.0"
 
-_UID = os.getuid()
-_SOCKET_PATH = f"/tmp/r2agent-{_UID}.sock"
-_PID_PATH = f"/tmp/r2agent-{_UID}.pid"
-_STARTUP_TIMEOUT = 10
-_STARTUP_CHECK_INTERVAL = 0.2
+_agent_process: "R2AgentProcess | None" = None
 
 
-def _ping_server():
-    import json
-    import socket
-    import struct
+class R2AgentProcess:
+    def __init__(self):
+        self._proc: subprocess.Popen | None = None
+        self._reader_thread: threading.Thread | None = None
+        self._message_queue: queue.Queue = queue.Queue()
+        self._running = False
+        self._request_id = 0
+        self._lock = threading.Lock()
+        self._stderr_thread: threading.Thread | None = None
+        self._cancel_event = threading.Event()
+        self._in_request = False
 
-    try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        sock.connect(_SOCKET_PATH)
+        self._should_autostart()
 
-        request = {"jsonrpc": "2.0", "method": "ping", "id": 1}
-        data = json.dumps(request).encode("utf-8")
-        sock.sendall(struct.pack(">I", len(data)))
-        sock.sendall(data)
+    def start(self) -> bool:
+        if self._proc is not None and self._proc.poll() is None:
+            return True
 
-        length_data = b""
-        while len(length_data) < 4:
-            chunk = sock.recv(4 - len(length_data))
-            if not chunk:
+        try:
+            kwargs: dict = {
+                "stdin": subprocess.PIPE,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "bufsize": 0,
+            }
+
+            if sys.platform == "win32":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+            self._proc = subprocess.Popen(["r2agent", "stdio"], **kwargs)
+
+            self._running = True
+            self._start_reader_thread()
+            self._start_stderr_thread()
+
+            response = self._send_request("initialize", {"client_version": _VERSION})
+            if response is None:
+                self.stop()
                 return False
-            length_data += chunk
-        length = struct.unpack(">I", length_data)[0]
 
-        response_data = b""
-        while len(response_data) < length:
-            chunk = sock.recv(length - len(response_data))
-            if not chunk:
+            if "error" in response:
+                print(
+                    f"[r2agent] Initialization failed: {response['error'].get('message', 'Unknown error')}"
+                )
+                self.stop()
                 return False
-            response_data += chunk
 
-        response = json.loads(response_data.decode("utf-8"))
-        sock.close()
-        return response.get("result") == "pong"
-    except Exception:
-        return False
+            server_version = response.get("result", {}).get("server_version", "unknown")
+            if server_version != _VERSION:
+                print(
+                    f"[r2agent] Warning: Version mismatch - plugin={_VERSION}, server={server_version}"
+                )
 
+            return True
 
-def _get_server_version():
-    import json
-    import socket
-    import struct
+        except FileNotFoundError:
+            print("[r2agent] Error: r2agent command not found. Is it installed?")
+            return False
+        except Exception as e:
+            print(f"[r2agent] Error starting subprocess: {e}")
+            return False
 
-    try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        sock.connect(_SOCKET_PATH)
+    def stop(self):
+        self._running = False
 
-        request = {"jsonrpc": "2.0", "method": "get_version", "id": 1}
-        data = json.dumps(request).encode("utf-8")
-        sock.sendall(struct.pack(">I", len(data)))
-        sock.sendall(data)
+        if self._proc:
+            try:
+                self._send_message({"jsonrpc": "2.0", "method": "shutdown", "id": 0})
+            except Exception:
+                pass
 
-        length_data = b""
-        while len(length_data) < 4:
-            chunk = sock.recv(4 - len(length_data))
-            if not chunk:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+
+            self._proc = None
+
+        if self._reader_thread and self._reader_thread.is_alive():
+            self._reader_thread.join(timeout=1)
+
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=1)
+
+    def _should_autostart(self):
+        if os.environ.get("R2AGENT_AUTOSTART", "0") == "1":
+            _ = self.start()
+
+    def _start_reader_thread(self):
+
+        def reader_loop():
+            assert self._proc is not None
+            assert self._proc.stdout is not None
+
+            while self._running and self._proc.poll() is None:
+                try:
+                    line = self._proc.stdout.readline()
+                    if not line:
+                        break
+
+                    try:
+                        message = json.loads(line.decode("utf-8").strip())
+                        self._message_queue.put(message)
+                    except json.JSONDecodeError as e:
+                        print(
+                            f"[r2agent] Invalid JSON from server: {e}", file=sys.stderr
+                        )
+
+                except Exception as e:
+                    if self._running:
+                        print(f"[r2agent] Reader error: {e}", file=sys.stderr)
+                    break
+
+        self._reader_thread = threading.Thread(target=reader_loop, daemon=True)
+        self._reader_thread.start()
+
+    def _start_stderr_thread(self):
+
+        def stderr_loop():
+            assert self._proc is not None
+            assert self._proc.stderr is not None
+
+            while self._running and self._proc.poll() is None:
+                try:
+                    line = self._proc.stderr.readline()
+                    if not line:
+                        break
+
+                    sys.stderr.write(line.decode("utf-8", errors="replace"))
+                    sys.stderr.flush()
+
+                except Exception:
+                    break
+
+        self._stderr_thread = threading.Thread(target=stderr_loop, daemon=True)
+        self._stderr_thread.start()
+
+    def _send_message(self, message: dict):
+        if not self._proc or not self._proc.stdin:
+            raise RuntimeError("Process not running")
+
+        data = json.dumps(message) + "\n"
+        self._proc.stdin.write(data.encode("utf-8"))
+        self._proc.stdin.flush()
+
+    def _send_request(
+        self, method: str, params: dict | None = None, timeout: float = 30.0
+    ) -> dict | None:
+        with self._lock:
+            self._request_id += 1
+            req_id = self._request_id
+
+        message: dict = {"jsonrpc": "2.0", "method": method, "id": req_id}
+        if params:
+            message["params"] = params
+
+        self._send_message(message)
+
+        try:
+            while True:
+                response = self._message_queue.get(timeout=timeout)
+                if response.get("id") == req_id:
+                    return response
+                self._message_queue.put(response)
+        except queue.Empty:
+            print(f"[r2agent] Timeout waiting for response to {method}")
+            return None
+
+    def _read_message(self, timeout: float = 30.0) -> dict | None:
+        elapsed = 0.0
+        check_interval = 0.05
+        while elapsed < timeout:
+            if self._cancel_event.is_set():
                 return None
-            length_data += chunk
-        length = struct.unpack(">I", length_data)[0]
-
-        response_data = b""
-        while len(response_data) < length:
-            chunk = sock.recv(length - len(response_data))
-            if not chunk:
-                return None
-            response_data += chunk
-
-        response = json.loads(response_data.decode("utf-8"))
-        sock.close()
-        return response.get("result")
-    except Exception:
+            try:
+                return self._message_queue.get(timeout=check_interval)
+            except queue.Empty:
+                elapsed += check_interval
         return None
 
+    def cancel(self):
+        self._cancel_event.set()
+        try:
+            self._send_message({"jsonrpc": "2.0", "method": "cancel"})
+        except Exception:
+            pass
 
-def _start_server():
-    try:
-        subprocess.Popen(
-            ["r2agent", "start"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        return True
-    except Exception as e:
-        print(f"[r2a] Failed to start server: {e}")
-        return False
+    def ask(self, prompt: str) -> str:
+        self._cancel_event.clear()
+        self._in_request = True
 
+        with self._lock:
+            self._request_id += 1
+            req_id = self._request_id
 
-def _ensure_server():
-    if _ping_server():
-        _check_version_mismatch()
-        return True
+        message = {
+            "jsonrpc": "2.0",
+            "method": "ask",
+            "params": {"prompt": prompt},
+            "id": req_id,
+        }
 
-    print("[r2agent] Server not running, starting...")
-    if not _start_server():
-        return False
+        try:
+            self._send_message(message)
+        except Exception as e:
+            self._in_request = False
+            return f"[r2agent] Error sending request: {e}"
 
-    start_time = time.time()
-    while time.time() - start_time < _STARTUP_TIMEOUT:
-        if _ping_server():
-            print("[r2agent] Server started")
-            _check_version_mismatch()
-            return True
-        time.sleep(_STARTUP_CHECK_INTERVAL)
+        cancelled = False
 
-    print("[r2agent] Server failed to start (timeout)")
-    return False
+        def sigint_handler(signum, frame):
+            nonlocal cancelled
+            cancelled = True
+            self.cancel()
 
+        try:
+            original_handler = signal.signal(signal.SIGINT, sigint_handler)
+        except (ValueError, OSError):
+            original_handler = None
 
-def _check_version_mismatch():
-    server_version = _get_server_version()
+        try:
+            while True:
+                if self._cancel_event.is_set():
+                    cancelled = True
+                    break
 
-    if server_version != _VERSION:
-        print(
-            f"[r2agent] Warning: Version mismatch - plugin={_VERSION}, server={server_version}"
-        )
-        print("[r2agent] Consider restarting the server: r2a- && r2aS")
+                msg = self._read_message(timeout=120.0)
 
+                if msg is None:
+                    if self._cancel_event.is_set():
+                        cancelled = True
+                    else:
+                        print("\n[r2agent] Timeout waiting for response")
+                    break
 
-def _ask(prompt):
-    proc = subprocess.Popen(
-        ["r2agent", "r2pipe", prompt],
-        stdout=subprocess.PIPE,
-        stdin=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=0,
-    )
-
-    stdout_fd = proc.stdout.fileno()
-    flags = fcntl.fcntl(stdout_fd, fcntl.F_GETFL)
-    fcntl.fcntl(stdout_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-
-    stderr_fd = proc.stderr.fileno()
-    flags = fcntl.fcntl(stderr_fd, fcntl.F_GETFL)
-    fcntl.fcntl(stderr_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-
-    buffer = b""
-
-    try:
-        while True:
-            ready, _, _ = select.select([stdout_fd, stderr_fd], [], [], 0.1)
-
-            for fd in ready:
-                try:
-                    chunk = os.read(fd, 4096)
-                    if not chunk:
-                        continue
-
-                    if fd == stderr_fd:
-                        sys.stderr.write(chunk.decode("utf-8", errors="replace"))
-                        sys.stderr.flush()
-                        continue
-
-                    buffer += chunk
-
-                    while b"\x00" in buffer:
-                        start = buffer.find(b"\x00")
-                        end = buffer.find(b"\x00", start + 1)
-
-                        if end == -1:
-                            break
-
-                        before = buffer[:start]
-                        if before:
-                            text = before.decode("utf-8", errors="replace")
-                            print(text, end="", flush=True)
-
-                        marker = buffer[start + 1 : end].decode(
-                            "utf-8", errors="replace"
+                if msg.get("id") == req_id:
+                    if "error" in msg:
+                        print(
+                            f"\n[r2agent] Error: {msg['error'].get('message', 'Unknown error')}"
                         )
-                        buffer = buffer[end + 1 :]
+                    break
 
-                        if marker.startswith("TOOL:"):
-                            parts = marker[5:].split(":", 2)
-                            if len(parts) >= 3:
-                                call_id, name, args_json = parts
-                                try:
-                                    import json
+                method = msg.get("method")
+                params = msg.get("params", {})
 
-                                    args = json.loads(args_json)
-                                except Exception:
-                                    args = {}
+                if method == "stream":
+                    stream_type = params.get("type")
+                    data = params.get("data", {})
 
-                                if name == "r2cmd":
-                                    command = args.get("command", "")
-                                    try:
-                                        result = r2lang.cmd(command) if r2lang else ""
-                                        result = result or ""
-                                    except Exception as e:
-                                        result = f"Error: {e}"
-                                else:
-                                    result = f"Unknown tool: {name}"
+                    if stream_type == "text_delta":
+                        delta = data.get("delta", "")
+                        print(delta, end="", flush=True)
 
-                                result_bytes = result.encode("utf-8")
-                                proc.stdin.write(
-                                    f"{len(result_bytes)}\n".encode("utf-8")
-                                )
-                                proc.stdin.flush()
-                                proc.stdin.write(result_bytes)
-                                proc.stdin.flush()
-                                proc.stdin.write(b"\n")
-                                proc.stdin.flush()
+                    elif stream_type == "agent_start":
+                        agent_name = data.get("name", "unknown")
+                        print(f"\n[{agent_name}] ", end="", flush=True)
 
-                        elif marker.startswith("ERROR:"):
-                            error_msg = marker[6:]
-                            print(f"\nError: {error_msg}", flush=True)
+                    elif stream_type == "tool_call":
+                        tool_name = data.get("name", "unknown")
+                        args = data.get("args", {})
+                        args_str = (
+                            ", ".join(f"{k}={v}" for k, v in args.items())
+                            if args
+                            else ""
+                        )
+                        print(f"\n  → {tool_name}({args_str})", flush=True)
 
-                        elif marker == "DONE":
-                            print(flush=True)
+                elif method == "tool_call":
+                    call_id = params.get("id", "")
+                    name = params.get("name", "")
+                    args = params.get("args", {})
 
-                    if buffer and b"\x00" not in buffer:
-                        text = buffer.decode("utf-8", errors="replace")
-                        print(text, end="", flush=True)
-                        buffer = b""
+                    if name == "r2cmd":
+                        command = args.get("command", "")
+                        try:
+                            result = r2lang.cmd(command) if r2lang else ""
+                            result = result or ""
+                        except Exception as e:
+                            result = f"Error: {e}"
+                    else:
+                        result = f"Unknown tool: {name}"
 
-                except BlockingIOError:
-                    pass
+                    self._send_message(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "tool_result",
+                            "params": {"id": call_id, "result": result},
+                        }
+                    )
 
-            exit_code = proc.poll()
-            if exit_code is not None:
+        finally:
+            if original_handler is not None:
                 try:
-                    remaining = proc.stdout.read()
-                    if remaining:
-                        text = remaining.decode("utf-8", errors="replace")
-                        text = text.replace("\x00DONE\x00", "")
-                        if text.strip():
-                            print(text, end="", flush=True)
-                except:
+                    signal.signal(signal.SIGINT, original_handler)
+                except (ValueError, OSError, TypeError):
                     pass
+            self._in_request = False
 
-                if exit_code == 2 or exit_code == -2:
-                    print("\n[interrupted]", flush=True)
-                elif exit_code != 0:
-                    try:
-                        stderr_out = proc.stderr.read()
-                        if stderr_out:
-                            print(
-                                stderr_out.decode("utf-8", errors="replace"), flush=True
-                            )
-                    except:
-                        pass
+        if cancelled:
+            print("\n[interrupted]", flush=True)
+        else:
+            print(flush=True)
+        return ""
 
-                break
-
-    except Exception as e:
-        print(f"\n[r2agent] Error: {e}", flush=True)
-        proc.terminate()
-        proc.wait()
-
-    return ""
+    def is_running(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
 
 
-def _stop_server():
-    """Stop the r2agent server."""
-    import signal
+def _get_agent() -> R2AgentProcess | None:
+    global _agent_process
 
-    if not os.path.exists(_PID_PATH):
-        return False, "Server is not running (no PID file)"
+    if _agent_process is None:
+        _agent_process = R2AgentProcess()
 
-    try:
-        with open(_PID_PATH) as f:
-            pid = int(f.read().strip())
-        os.kill(pid, signal.SIGTERM)
-        return True, f"Server stopped (PID {pid})"
-    except ProcessLookupError:
-        os.unlink(_PID_PATH)
-        return False, "Server process not found, cleaned up PID file"
-    except Exception as e:
-        return False, f"Error stopping server: {e}"
+    if not _agent_process.is_running():
+        if not _agent_process.start():
+            return None
+
+    return _agent_process
 
 
 def _show_help():
-    """Return help message."""
     return (
-        "Usage: r2a[?vsSq-] [prompt]\n"
+        "Usage: r2a[?v] [prompt]\n"
         "\n"
         "| r2a <prompt>   ask the AI a question\n"
         "| r2a?           show this help\n"
         "| r2av           show version info\n"
-        "| r2as           check server status\n"
-        "| r2aS           start server\n"
-        "| r2a-           stop server\n"
         "\n"
         "Press Ctrl+C to cancel a streaming response.\n"
     )
@@ -313,14 +360,7 @@ def r2agent_plugin(a):
     def _call(cmd):
         cmd = cmd.strip()
 
-        if (
-            cmd == "r2a"
-            or cmd == "r2a?"
-            or cmd == "r2av"
-            or cmd == "r2as"
-            or cmd == "r2aS"
-            or cmd == "r2a-"
-        ):
+        if cmd == "r2a" or cmd == "r2a?" or cmd == "r2av":
             pass
         elif cmd.startswith("r2a "):
             pass
@@ -335,38 +375,12 @@ def r2agent_plugin(a):
                 return 1
 
             if cmd == "r2av":
-                server_version = _get_server_version() if _ping_server() else None
+                agent = _get_agent()
                 print(f"Plugin version: {_VERSION}", flush=True)
-                if server_version:
-                    print(f"Server version: {server_version}", flush=True)
-                    if server_version != _VERSION:
-                        print("Warning: Version mismatch!", flush=True)
+                if agent and agent.is_running():
+                    print("Server: running (subprocess)", flush=True)
                 else:
-                    print(
-                        "Server version: not available (server not running)", flush=True
-                    )
-                return 1
-
-            if cmd == "r2as":
-                if _ping_server():
-                    print("Server is running", flush=True)
-                else:
-                    print("Server is not running", flush=True)
-                return 1
-
-            if cmd == "r2aS":
-                if _ping_server():
-                    print("Server is already running", flush=True)
-                else:
-                    if _start_server():
-                        print("Server starting...", flush=True)
-                    else:
-                        print("Failed to start server", flush=True)
-                return 1
-
-            if cmd == "r2a-":
-                success, msg = _stop_server()
-                print(msg, flush=True)
+                    print("Server: not running", flush=True)
                 return 1
 
             if cmd.startswith("r2a "):
@@ -379,18 +393,19 @@ def r2agent_plugin(a):
                 print(_show_help(), flush=True)
                 return 1
 
-            if not _ensure_server():
-                print("Error: Could not start r2agent server", flush=True)
+            agent = _get_agent()
+            if not agent:
+                print("[r2agent] Error: Could not start r2agent subprocess", flush=True)
                 return 1
 
-            result = _ask(prompt)
-            if result:
-                print(result, flush=True)
+            agent.ask(prompt)
+
             return 1
+
         except Exception as e:
             import traceback
 
-            print(f"[r2a] Error: {e}", flush=True)
+            print(f"[r2agent] Error: {e}", flush=True)
             traceback.print_exc()
             sys.stdout.flush()
             return 1

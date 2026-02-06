@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -15,24 +14,6 @@ class ProviderConfig(BaseModel):
     api_key: Optional[str] = Field(default=None, description="API key (if required)")
 
 
-class ServerConfig(BaseModel):
-    socket_path: Optional[str] = Field(default=None, description="Unix socket path")
-
-    def get_socket_path(self) -> str:
-        if self.socket_path:
-            return self.socket_path
-        uid = os.getuid()
-        return f"/tmp/r2agent-{uid}.sock"
-
-    def get_pid_path(self) -> str:
-        uid = os.getuid()
-        return f"/tmp/r2agent-{uid}.pid"
-
-    def get_log_path(self) -> str:
-        uid = os.getuid()
-        return f"/tmp/r2agent-{uid}.log"
-
-
 class R2AgentConfig(BaseModel):
     default_provider: str = Field(
         default="default", description="Default provider to use"
@@ -42,9 +23,6 @@ class R2AgentConfig(BaseModel):
     )
     providers: dict[str, ProviderConfig] = Field(
         default_factory=lambda: {"default": ProviderConfig(model="gpt-4o-mini")}
-    )
-    server: ServerConfig = Field(
-        default_factory=ServerConfig, description="Server configuration"
     )
 
     @classmethod

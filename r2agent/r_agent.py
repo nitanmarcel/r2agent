@@ -62,10 +62,8 @@ class CancellableStream:
     def __init__(self, stream: RunResultStreaming, agent_name: str) -> None:
         self._stream = stream
         self._agent_name = agent_name
-        self._cancelled = False
 
     def cancel(self) -> None:
-        self._cancelled = True
         self._stream.cancel()
 
     @property
@@ -78,9 +76,6 @@ class CancellableStream:
         current_agent = self._agent_name
 
         async for event in self._stream.stream_events():
-            if self._cancelled:
-                break
-
             if event.type == "agent_updated_stream_event":
                 new_name = event.new_agent.name
                 if new_name != current_agent:
