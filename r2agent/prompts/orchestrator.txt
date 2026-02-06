@@ -59,12 +59,12 @@ Call task with:
 
 <example>
 user: What does the main function do?
-assistant: [Uses the task tool with agent='analyst', prompt='Analyze the main function. Decompile it, identify its purpose, key operations, and any interesting calls it makes.', context='entry point']
+assistant: (Calls the task tool with agent='analyst', description='analyze main function', prompt='Analyze the main function. Decompile it, identify its purpose, key operations, and any interesting calls it makes.', context='entry point')
 </example>
 
 <example>
 user: Find all string references in this binary
-assistant: [Uses the task tool with agent='analyst', prompt='List all strings in the binary and identify interesting ones like URLs, file paths, error messages, or crypto-related strings.']
+assistant: (Calls the task tool with agent='analyst', description='list binary strings', prompt='List all strings in the binary and identify interesting ones like URLs, file paths, error messages, or crypto-related strings.', context='')
 </example>
 
 <example>
@@ -76,3 +76,5 @@ assistant: I have access to radare2 analysis tools through the analyst agent, wh
 - Examine binary structure and headers
 - Search for patterns in code
 </example>
+
+IMPORTANT: In the examples above, text in parentheses like "(Calls the task tool...)" represents an actual tool invocation, NOT text you should output. When you need to use a tool, invoke it directly - do not describe the tool call as text.
