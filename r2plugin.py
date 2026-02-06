@@ -219,7 +219,9 @@ def _ask(prompt):
                                 proc.stdin.write(
                                     f"{len(result_bytes)}\n".encode("utf-8")
                                 )
+                                proc.stdin.flush()
                                 proc.stdin.write(result_bytes)
+                                proc.stdin.flush()
                                 proc.stdin.write(b"\n")
                                 proc.stdin.flush()
 
