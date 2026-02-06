@@ -6,6 +6,15 @@ from typing import Any, Callable
 from .config import get_config
 from .r_agent import StreamEvent
 from .r_session import RSession
+from .sessions import (
+    SessionInfo,
+    delete_session,
+    generate_session_id,
+    get_session_path,
+    list_sessions,
+    session_exists,
+    touch_session,
+)
 from .tools import BUILTIN_TOOLS, clear_ipc_callback, r2cmd, set_ipc_callback
 from .transports.base import Transport, TransportClosed, TransportError
 
@@ -40,12 +49,26 @@ class ProtocolHandler:
         self.transport = transport
         self.config = get_config()
         self._initialized = False
+        self._current_session: RSession | None = None
+        self._current_session_id: str | None = None
+        self._current_binary: str | None = None
 
-    def _create_session(self) -> RSession:
+    def _create_session(self, session_id: str | None = None) -> RSession:
+        if session_id is None:
+            session_id = generate_session_id(self._current_binary or "unknown")
+
+        db_path = get_session_path(session_id)
+        self._current_session_id = session_id
+
         extra_tools = list(BUILTIN_TOOLS)
         if self.config.allow_r2cmd:
             extra_tools.append(r2cmd)
-        return RSession(extra_tools=extra_tools)
+
+        return RSession(
+            session_id=session_id,
+            db_path=db_path,
+            extra_tools=extra_tools,
+        )
 
     async def _send_response(self, result: Any, req_id: Any) -> None:
         await self.transport.write_message(
@@ -69,8 +92,11 @@ class ProtocolHandler:
 
     async def _handle_initialize(self, params: dict[str, Any], req_id: Any) -> None:
         client_version = params.get("client_version", "unknown")
-        logger.info(f"Client connected: version {client_version}")
+        binary_name = params.get("binary_name", "unknown")
 
+        logger.info(f"Client connected: version {client_version}, binary={binary_name}")
+
+        self._current_binary = binary_name
         self._initialized = True
         await self._send_response(
             {"server_version": __version__, "protocol_version": PROTOCOL_VERSION},
@@ -108,7 +134,13 @@ class ProtocolHandler:
         set_ipc_callback(ipc_callback)
 
         try:
-            session = self._create_session()
+            if self._current_session is None:
+                self._current_session = self._create_session()
+            session = self._current_session
+
+            if self._current_session_id:
+                touch_session(self._current_session_id)
+
             full_text: list[str] = []
 
             stream = session.main_agent.ask_stream(prompt)
@@ -197,6 +229,89 @@ class ProtocolHandler:
         finally:
             clear_ipc_callback()
 
+    async def _handle_session_list(self, params: dict[str, Any], req_id: Any) -> None:
+        filter_binary = params.get("filter_binary", True)
+        binary_name = self._current_binary if filter_binary else None
+
+        sessions = list_sessions(binary_name)
+        result = [
+            {
+                "session_id": s.session_id,
+                "binary_name": s.binary_name,
+                "created_at": s.created_at.isoformat(),
+                "last_accessed": s.last_accessed.isoformat(),
+                "is_current": s.session_id == self._current_session_id,
+            }
+            for s in sessions
+        ]
+        await self._send_response(result, req_id)
+
+    async def _handle_session_switch(self, params: dict[str, Any], req_id: Any) -> None:
+        session_id = params.get("session_id")
+        if not session_id:
+            await self._send_error(INVALID_PARAMS, "session_id is required", req_id)
+            return
+
+        if not session_exists(session_id):
+            await self._send_error(
+                INVALID_PARAMS, f"Session not found: {session_id}", req_id
+            )
+            return
+
+        self._current_session = self._create_session(session_id)
+        touch_session(session_id)
+
+        await self._send_response(
+            {"session_id": session_id, "message": "Switched to session"},
+            req_id,
+        )
+
+    async def _handle_session_new(self, params: dict[str, Any], req_id: Any) -> None:
+        session_id = generate_session_id(self._current_binary or "unknown")
+        self._current_session = self._create_session(session_id)
+
+        await self._send_response(
+            {"session_id": session_id, "message": "Created new session"},
+            req_id,
+        )
+
+    async def _handle_session_delete(self, params: dict[str, Any], req_id: Any) -> None:
+        session_id = params.get("session_id")
+        if not session_id:
+            await self._send_error(INVALID_PARAMS, "session_id is required", req_id)
+            return
+
+        if not session_exists(session_id):
+            await self._send_error(
+                INVALID_PARAMS, f"Session not found: {session_id}", req_id
+            )
+            return
+
+        if session_id == self._current_session_id:
+            self._current_session = None
+            self._current_session_id = None
+
+        delete_session(session_id)
+        await self._send_response(
+            {"session_id": session_id, "message": "Session deleted"},
+            req_id,
+        )
+
+    async def _handle_session_current(
+        self, params: dict[str, Any], req_id: Any
+    ) -> None:
+        if self._current_session_id is None:
+            await self._send_response(None, req_id)
+            return
+
+        await self._send_response(
+            {
+                "session_id": self._current_session_id,
+                "binary_name": self._current_binary,
+            },
+            req_id,
+        )
+
     async def _handle_message(self, message: dict[str, Any]) -> bool:
         method = message.get("method")
         params = message.get("params", {})
@@ -211,6 +326,16 @@ class ProtocolHandler:
                 await self._handle_ping(req_id)
             elif method == "ask":
                 await self._handle_ask(params, req_id)
+            elif method == "session_list":
+                await self._handle_session_list(params, req_id)
+            elif method == "session_switch":
+                await self._handle_session_switch(params, req_id)
+            elif method == "session_new":
+                await self._handle_session_new(params, req_id)
+            elif method == "session_delete":
+                await self._handle_session_delete(params, req_id)
+            elif method == "session_current":
+                await self._handle_session_current(params, req_id)
             elif method == "shutdown":
                 if is_request:
                     await self._send_response("ok", req_id)

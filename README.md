@@ -54,7 +54,12 @@ $ r2 /bin/ls
 - `r2a <prompt>` - Ask the AI a question
 - `r2a?` - Show help
 - `r2av` - Show version info
-
+- `r2as` - List sessions for current binary
+- `r2as*` - List all sessions
+- `r2as <id>` - Switch to session
+- `r2aS` - Create new session
+- `r2as- <id>` - Delete session
+- `r2as?` - Show current session
 Press `Ctrl+C` to cancel a streaming response.
 
 ## License

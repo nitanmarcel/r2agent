@@ -30,8 +30,24 @@ class R2AgentProcess:
         self._stderr_thread: threading.Thread | None = None
         self._cancel_event = threading.Event()
         self._in_request = False
+        self._binary_name: str = "unknown"
 
         self._should_autostart()
+
+    def _get_binary_name(self) -> str:
+        if not r2lang:
+            return "unknown"
+        try:
+            info_json = r2lang.cmd("ij")
+            data = json.loads(info_json) if info_json else {}
+            binary_path = data.get("core", {}).get("file") or data.get("bin", {}).get(
+                "file", ""
+            )
+            if binary_path:
+                return os.path.basename(binary_path)
+        except (json.JSONDecodeError, Exception):
+            pass
+        return "unknown"
 
     def start(self) -> bool:
         if self._proc is not None and self._proc.poll() is None:
@@ -54,7 +70,12 @@ class R2AgentProcess:
             self._start_reader_thread()
             self._start_stderr_thread()
 
-            response = self._send_request("initialize", {"client_version": _VERSION})
+            self._binary_name = self._get_binary_name()
+
+            response = self._send_request(
+                "initialize",
+                {"client_version": _VERSION, "binary_name": self._binary_name},
+            )
             if response is None:
                 self.stop()
                 return False
@@ -112,7 +133,6 @@ class R2AgentProcess:
             _ = self.start()
 
     def _start_reader_thread(self):
-
         def reader_loop():
             assert self._proc is not None
             assert self._proc.stdout is not None
@@ -140,7 +160,6 @@ class R2AgentProcess:
         self._reader_thread.start()
 
     def _start_stderr_thread(self):
-
         def stderr_loop():
             assert self._proc is not None
             assert self._proc.stderr is not None
@@ -330,6 +349,40 @@ class R2AgentProcess:
     def is_running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
+    def session_list(self, filter_binary: bool = True) -> list[dict] | None:
+        response = self._send_request("session_list", {"filter_binary": filter_binary})
+        if response and "result" in response:
+            return response["result"]
+        return None
+
+    def session_switch(self, session_id: str) -> dict | None:
+        response = self._send_request("session_switch", {"session_id": session_id})
+        if response:
+            if "error" in response:
+                return {"error": response["error"].get("message", "Unknown error")}
+            return response.get("result")
+        return None
+
+    def session_new(self) -> dict | None:
+        response = self._send_request("session_new", {})
+        if response and "result" in response:
+            return response["result"]
+        return None
+
+    def session_delete(self, session_id: str) -> dict | None:
+        response = self._send_request("session_delete", {"session_id": session_id})
+        if response:
+            if "error" in response:
+                return {"error": response["error"].get("message", "Unknown error")}
+            return response.get("result")
+        return None
+
+    def session_current(self) -> dict | None:
+        response = self._send_request("session_current", {})
+        if response and "result" in response:
+            return response["result"]
+        return None
+
 
 def _get_agent() -> R2AgentProcess | None:
     global _agent_process
@@ -346,23 +399,52 @@ def _get_agent() -> R2AgentProcess | None:
 
 def _show_help():
     return (
-        "Usage: r2a[?v] [prompt]\n"
+        "Usage: r2a[?vsSS-] [prompt|session_id]\n"
         "\n"
-        "| r2a <prompt>   ask the AI a question\n"
-        "| r2a?           show this help\n"
-        "| r2av           show version info\n"
+        "| r2a <prompt>      ask the AI a question\n"
+        "| r2a?              show this help\n"
+        "| r2av              show version info\n"
+        "| r2as              list sessions for current binary\n"
+        "| r2as*             list all sessions\n"
+        "| r2as <id>         switch to session\n"
+        "| r2aS              create new session\n"
+        "| r2as- <id>        delete session\n"
+        "| r2as?             show current session\n"
         "\n"
         "Press Ctrl+C to cancel a streaming response.\n"
     )
+
+
+def _print_session_list(sessions: list[dict]) -> None:
+    print(
+        f"{'nth':<4} {'session_id':<40} {'binary':<20} {'last_accessed':<20} {'current'}",
+        flush=True,
+    )
+    print("\u2015" * 95, flush=True)
+    for idx, s in enumerate(sessions):
+        session_id = s.get("session_id", "")
+        binary = s.get("binary_name", "")
+        last_accessed = s.get("last_accessed", "")[:19]
+        current = "*" if s.get("is_current") else ""
+        print(
+            f"{idx:<4} {session_id:<40} {binary:<20} {last_accessed:<20} {current}",
+            flush=True,
+        )
 
 
 def r2agent_plugin(a):
     def _call(cmd):
         cmd = cmd.strip()
 
-        if cmd == "r2a" or cmd == "r2a?" or cmd == "r2av":
+        if cmd in ("r2a", "r2a?", "r2av", "r2as", "r2as*", "r2as?", "r2aS"):
             pass
         elif cmd.startswith("r2a "):
+            pass
+        elif cmd.startswith("r2as "):
+            pass
+        elif cmd.startswith("r2as- "):
+            pass
+        elif cmd == "r2as-":
             pass
         else:
             return 0
@@ -381,6 +463,127 @@ def r2agent_plugin(a):
                     print("Server: running (subprocess)", flush=True)
                 else:
                     print("Server: not running", flush=True)
+                return 1
+
+            if cmd == "r2as?":
+                agent = _get_agent()
+                if not agent:
+                    print(
+                        "[r2agent] Error: Could not start r2agent subprocess",
+                        flush=True,
+                    )
+                    return 1
+                result = agent.session_current()
+                if result:
+                    print(f"Session: {result.get('session_id', 'none')}", flush=True)
+                    print(f"Binary: {result.get('binary_name', 'unknown')}", flush=True)
+                else:
+                    print("No active session", flush=True)
+                return 1
+
+            if cmd == "r2as":
+                agent = _get_agent()
+                if not agent:
+                    print(
+                        "[r2agent] Error: Could not start r2agent subprocess",
+                        flush=True,
+                    )
+                    return 1
+                sessions = agent.session_list(filter_binary=True)
+                if sessions is None:
+                    print("[r2agent] Error: Failed to list sessions", flush=True)
+                    return 1
+                if not sessions:
+                    print("No sessions for current binary", flush=True)
+                    return 1
+                _print_session_list(sessions)
+                return 1
+
+            if cmd == "r2as*":
+                agent = _get_agent()
+                if not agent:
+                    print(
+                        "[r2agent] Error: Could not start r2agent subprocess",
+                        flush=True,
+                    )
+                    return 1
+                sessions = agent.session_list(filter_binary=False)
+                if sessions is None:
+                    print("[r2agent] Error: Failed to list sessions", flush=True)
+                    return 1
+                if not sessions:
+                    print("No sessions found", flush=True)
+                    return 1
+                _print_session_list(sessions)
+                return 1
+
+            if cmd.startswith("r2as "):
+                session_id = cmd[5:].strip()
+                if not session_id:
+                    print("Usage: r2as <session_id>", flush=True)
+                    return 1
+                agent = _get_agent()
+                if not agent:
+                    print(
+                        "[r2agent] Error: Could not start r2agent subprocess",
+                        flush=True,
+                    )
+                    return 1
+                result = agent.session_switch(session_id)
+                if result and "error" in result:
+                    print(f"[r2agent] Error: {result['error']}", flush=True)
+                elif result:
+                    print(
+                        f"Switched to session: {result.get('session_id', session_id)}",
+                        flush=True,
+                    )
+                else:
+                    print("[r2agent] Error: Failed to switch session", flush=True)
+                return 1
+
+            if cmd == "r2aS":
+                agent = _get_agent()
+                if not agent:
+                    print(
+                        "[r2agent] Error: Could not start r2agent subprocess",
+                        flush=True,
+                    )
+                    return 1
+                result = agent.session_new()
+                if result:
+                    print(
+                        f"Created new session: {result.get('session_id', 'unknown')}",
+                        flush=True,
+                    )
+                else:
+                    print("[r2agent] Error: Failed to create session", flush=True)
+                return 1
+
+            if cmd.startswith("r2as- ") or cmd == "r2as-":
+                if cmd == "r2as-":
+                    print("Usage: r2as- <session_id>", flush=True)
+                    return 1
+                session_id = cmd[6:].strip()
+                if not session_id:
+                    print("Usage: r2as- <session_id>", flush=True)
+                    return 1
+                agent = _get_agent()
+                if not agent:
+                    print(
+                        "[r2agent] Error: Could not start r2agent subprocess",
+                        flush=True,
+                    )
+                    return 1
+                result = agent.session_delete(session_id)
+                if result and "error" in result:
+                    print(f"[r2agent] Error: {result['error']}", flush=True)
+                elif result:
+                    print(
+                        f"Deleted session: {result.get('session_id', session_id)}",
+                        flush=True,
+                    )
+                else:
+                    print("[r2agent] Error: Failed to delete session", flush=True)
                 return 1
 
             if cmd.startswith("r2a "):

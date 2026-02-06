@@ -1,8 +1,10 @@
 import json
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, cast
 
-from agents import FunctionTool, SQLiteSession
+from agents import FunctionTool
+from agents.extensions.memory import AdvancedSQLiteSession
 from agents.tool_context import ToolContext
 from pydantic import BaseModel, Field
 
@@ -40,10 +42,16 @@ class RSession:
     def __init__(
         self,
         session_id: str | None = None,
+        db_path: str | Path | None = None,
         extra_tools: list["Tool"] | None = None,
     ) -> None:
         resolved_session_id = session_id or str(uuid.uuid4())
-        self._session = SQLiteSession(resolved_session_id)
+        resolved_db_path = str(db_path) if db_path else ":memory:"
+        self._session = AdvancedSQLiteSession(
+            session_id=resolved_session_id,
+            db_path=resolved_db_path,
+            create_tables=True,
+        )
         self._extra_tools: list["Tool"] = extra_tools or []
         self._orchestrator_tools: list["Tool"] = []
         self._orchestrator: RAgent | None = None
