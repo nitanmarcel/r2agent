@@ -77,17 +77,24 @@ async def binary_info(
 
 @function_tool
 async def list_functions(
-    format: Literal["standard", "verbose", "quiet", "size_sum", "count"] = "standard",
+    filter: str | None = None,
+    min_size: int | None = None,
+    page: int = 1,
+    page_size: int = 100,
 ) -> str:
-    """List all functions discovered in the binary.
+    """List functions discovered in the binary with filtering and pagination.
 
     Returns function addresses, sizes, and names. Use this to explore code
     structure, find entry points, or locate specific functions.
 
+    Results are paginated to avoid overwhelming output. Use the page parameter
+    to navigate through results.
+
     When to Use:
     - To see what functions exist in the binary
-    - To find a specific function by name
+    - To find a specific function by name (use filter parameter)
     - Before decompiling, to get the correct function address
+    - Use min_size to find non-trivial functions (skip small stubs)
 
     When NOT to Use:
     - Do NOT call analyze() before this - just call list_functions directly
@@ -97,21 +104,28 @@ async def list_functions(
     But always try this tool first before running analysis.
 
     Args:
-        format: Output format
-            - "standard": Address, size, name (default)
-            - "verbose": Includes signature, locals, xrefs
-            - "quiet": Addresses only
-            - "size_sum": Total size of all functions
-            - "count": Number of functions only
+        filter: Optional substring to search for in function names
+        min_size: Optional minimum function size in bytes
+        page: Page number for pagination (default 1)
+        page_size: Number of functions per page (default 100, max 500)
     """
-    format_map = {
-        "standard": "",
-        "verbose": "l",
-        "quiet": "q",
-        "size_sum": "+",
-        "count": "c",
-    }
-    result = await r2(f"afl{format_map[format]}")
+    query_parts = []
+
+    if filter:
+        query_parts.append(f"name/str/{filter}")
+
+    if min_size is not None and min_size > 0:
+        query_parts.append(f"size/gt/{min_size - 1}")
+
+    page_size = max(1, min(page_size, 500))
+    page = max(1, page)
+
+    query_parts.append(f"*/page/{page}/{page_size}")
+
+    query = ",".join(query_parts) if query_parts else ""
+    cmd = f"afl,{query}"
+
+    result = await r2(cmd)
 
     if not result or not result.strip():
         return "No functions found. The binary may not be analyzed yet. Run analyze() first."
@@ -156,28 +170,56 @@ async def decompile(
 
 @function_tool
 async def list_strings(
-    scope: Literal["data", "all", "quiet"] = "data",
+    scope: Literal["data", "all"] = "data",
+    filter: str | None = None,
+    min_length: int | None = None,
+    page: int = 1,
+    page_size: int = 100,
 ) -> str:
-    """List strings found in the binary.
+    """List strings found in the binary with filtering and pagination.
 
     Finds hardcoded text: messages, paths, URLs, API names, format strings.
     Does NOT require analyze() - reads string data directly.
+
+    Results are paginated to avoid overwhelming output. Use the page parameter
+    to navigate through results.
 
     When to Use:
     - To find interesting strings for reverse engineering
     - To locate error messages, URLs, or file paths
     - To understand what the binary might do
+    - Use filter to search for specific patterns (e.g., "error", "http", "password")
 
     Args:
         scope: Search scope
             - "data": Data sections only (default, faster)
-            - "all": Entire binary including code
-            - "quiet": Simplified output (address + string)
+            - "all": Entire binary including code sections
+        filter: Optional substring to search for in strings (case-sensitive)
+        min_length: Optional minimum string length to include
+        page: Page number for pagination (default 1)
+        page_size: Number of strings per page (default 100, max 500)
     """
-    modifier = {"data": "", "all": "z", "quiet": "q"}[scope]
-    result = await r2(f"iz{modifier}")
+    base_cmd = "izz," if scope == "all" else "iz,"
+
+    query_parts = []
+
+    if filter:
+        query_parts.append(f"string/str/{filter}")
+
+    if min_length is not None and min_length > 0:
+        query_parts.append(f"len/gt/{min_length - 1}")
+
+    page_size = max(1, min(page_size, 500))
+    page = max(1, page)
+
+    query_parts.append(f"*/page/{page}/{page_size}")
+
+    query = ",".join(query_parts) if query_parts else ""
+    cmd = f"{base_cmd}{query}"
+
+    result = await r2(cmd)
 
     if not result or not result.strip():
-        return "No strings found in the binary."
+        return "No strings found."
 
     return result
