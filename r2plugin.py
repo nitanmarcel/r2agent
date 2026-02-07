@@ -143,13 +143,15 @@ class R2AgentProcess:
                     if not line:
                         break
 
+                    text = line.decode("utf-8", errors="replace").rstrip("\n\r")
+                    if not text:
+                        continue
+
                     try:
-                        message = json.loads(line.decode("utf-8").strip())
+                        message = json.loads(text)
                         self._message_queue.put(message)
-                    except json.JSONDecodeError as e:
-                        print(
-                            f"[r2agent] Invalid JSON from server: {e}", file=sys.stderr
-                        )
+                    except json.JSONDecodeError:
+                        print(text, flush=True)
 
                 except Exception as e:
                     if self._running:
