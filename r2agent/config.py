@@ -12,6 +12,9 @@ class ProviderConfig(BaseModel):
         default=None, description="Base URL (defaults to OpenAI)"
     )
     api_key: Optional[str] = Field(default=None, description="API key (if required)")
+    extra_headers: Optional[dict[str, str]] = Field(
+        default=None, description="Extra headers to send with requests"
+    )
 
 
 class R2AgentConfig(BaseModel):

@@ -116,6 +116,9 @@ class RAgent:
         if not instructions:
             raise ValueError("Agent instructions are required")
 
+        config = get_config()
+        provider_config = config.get_provider(provider)
+
         self._model = create_litellm_model(provider)
         self._session = session
         self._run_config = RunConfig(model_provider=LitellmProvider())
@@ -126,7 +129,10 @@ class RAgent:
             model=self._model,
             tools=tools or [],
             handoffs=handoffs or [],
-            model_settings=ModelSettings(tool_choice="auto"),
+            model_settings=ModelSettings(
+                tool_choice="auto",
+                extra_headers=provider_config.extra_headers,
+            ),
         )
 
     @property

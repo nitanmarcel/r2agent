@@ -27,16 +27,21 @@ Configuration file: `~/.config/r2agent/config.yaml`
   - `model` - Model in [LiteLLM](https://docs.litellm.ai/docs/providers) format (required)
   - `api_key` - API key for the provider (default: `null`)
   - `base_url` - Custom base URL (default: `https://api.openai.com/v1`)
+  - `extra_headers` - Extra headers to send with requests (default: null)
 
 Example:
 
 ```yaml
-default_provider: default
-allow_r2cmd: true
+default_provider: copilot
 providers:
-  default:
-    model: openai/gpt-4o-mini
-    api_key: your-api-key
+  copilot:
+    model: github_copilot/gpt-4
+    extra_headers:
+      Editor-Version: "vscode/1.109.0"
+      Copilot-Integration-Id: "vscode-chat"
+      x-github-api-version: "2025-05-01"
+      
+allow_r2cmd: true
 ```
 
 ## Usage

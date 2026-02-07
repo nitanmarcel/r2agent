@@ -14,7 +14,7 @@ except ImportError:
     _HAS_R2LANG = False
     r2lang = None
 
-_VERSION = "0.3.0"
+_VERSION = "0.3.1"
 
 _agent_process: "R2AgentProcess | None" = None
 
