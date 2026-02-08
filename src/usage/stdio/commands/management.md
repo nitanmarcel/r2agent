@@ -72,6 +72,7 @@ Send a prompt to the AI agent. The server streams responses via notifications be
 {jsonrpc: 2.0, method: stream, params: {type: text_delta, data: {delta: The main }}}
 {jsonrpc: 2.0, method: stream, params: {type: text_delta, data: {delta: function...}}}
 {jsonrpc: 2.0, method: stream, params: {type: tool_call, data: {name: decompile, args: {...}}}}
+{jsonrpc: 2.0, method: stream, params: {type: thinking, data: {delta: Let me analyze..., agent: analyst/thinking}}}
 ```
 
 **Final response**:
