@@ -13,5 +13,5 @@ Optional fields:
   * `providers` -> `<provider_name>` -> `api_key` - your API key for authentication.
   * `providers` -> `<provider_name>` -> `base_url` - custom base URL for the provider.
   * `providers` -> `<provider_name>` -> `extra_headers` - additional headers to send with requests.
+  * `providers` -> `<provider_name>` -> `extra_args` - extra provider-specific arguments passed to the model API.
   * `allow_r2cmd` - allow the AI to execute radare2 commands directly.
-
