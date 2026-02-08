@@ -62,6 +62,7 @@ typedef struct r2a_t {
 	R2AMsg *queue_tail;
 
 	RCore *core;
+	RStrBuf *sb;
 } R2A;
 
 typedef struct {
@@ -470,6 +471,8 @@ static void r2a_free(R2A *a) {
 	r2a_stop(a);
 	queue_clear(a);
 	free(a->binary_name);
+	r_strbuf_free(a->sb);
+	a->sb = NULL;
 
 #ifdef _WIN32
 	DeleteCriticalSection(&a->lock);
@@ -520,6 +523,37 @@ static char *get_binary_name(RCore *core) {
 	r_json_free(root);
 	free(info);
 	return result;
+}
+
+static bool logcb(void *user, int type, const char *origin, const char *msg) {
+	if (type > R_LOG_LEVEL_WARN) {
+		return false;
+	}
+	if (!msg || R_STR_ISEMPTY(origin)) {
+		return true;
+	}
+	R2A *a = (R2A *)user;
+	if (a->sb) {
+		const char *typestr = r_log_level_tostring(type);
+		r_strbuf_appendf(a->sb, "[%s] %s\n", typestr, msg);
+	}
+	return true;
+}
+
+static void r2a_log_reset(R2A *a) {
+	r_strbuf_free(a->sb);
+	a->sb = r_strbuf_new("");
+}
+
+static char *r2a_log_drain(R2A *a) {
+	char *s = r_strbuf_drain(a->sb);
+	if (R_STR_ISNOTEMPTY(s)) {
+		a->sb = NULL;
+		return s;
+	}
+	free(s);
+	a->sb = NULL;
+	return NULL;
 }
 
 static void r2a_send_message(R2A *a, const char *json_str) {
@@ -603,6 +637,7 @@ static bool r2a_start(R2A *a, RCore *core) {
 	}
 
 	a->running = true;
+	r_log_add_callback(logcb, a);
 
 #ifdef _WIN32
 	a->reader_thread = CreateThread(NULL, 0, stdout_reader, a, 0, NULL);
@@ -654,6 +689,7 @@ static bool r2a_start(R2A *a, RCore *core) {
 static void r2a_stop(R2A *a) {
 	if (!a->running) return;
 
+	r_log_del_callback(logcb);
 	r2a_send_message(a, "{\"jsonrpc\":\"2.0\",\"method\":\"shutdown\",\"id\":0}");
 
 	a->running = false;
@@ -865,7 +901,16 @@ static void r2a_ask(R2A *a, const char *prompt) {
 				if (!strcmp(name, "r2cmd") && jargs) {
 					const RJson *jcmd = r_json_get(jargs, "command");
 					if (jcmd && jcmd->str_value) {
+						r2a_log_reset(a);
 						result = r_core_cmd_str(core, jcmd->str_value);
+						char *err = r2a_log_drain(a);
+						if (err) {
+							char *newres = r_str_newf("%s<log>\n%s\n</log>\n",
+								result ? result : "", err);
+							free(result);
+							free(err);
+							result = newres;
+						}
 					}
 				} else if (name[0]) {
 					result = r_str_newf("Unknown tool: %s", name);
