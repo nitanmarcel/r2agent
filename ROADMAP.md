@@ -6,6 +6,10 @@
   * [x] decompile
   * [x] list_functions
   * [x] list_strings
+  * [x] disassemble
+  * [x] disassemble_function
+  * [x] xrefs_from
+  * [x] xrefs_to
   * [ ] add_comment
   * [ ] add_flag
   * [ ] analyze_function
@@ -14,8 +18,6 @@
   * [ ] define_enum
   * [ ] define_struct
   * [ ] delete_flag
-  * [ ] disassemble
-  * [ ] disassemble_function
   * [ ] flowgraph
   * [ ] function_info
   * [ ] function_signature
@@ -42,8 +44,6 @@
   * [ ] search_rop
   * [ ] search_string
   * [ ] seek
-  * [ ] xrefs_from
-  * [ ] xrefs_to
 * extensibility
   * [ ] Custom configurable agents
   * [ ] Custom tools (Python)

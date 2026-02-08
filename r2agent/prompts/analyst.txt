@@ -12,6 +12,9 @@ Guidelines:
 - Use decompile with addresses from list_functions output
 - Use list_strings to find interesting data like URLs, paths, error messages
 - Use binary_info to understand file format and architecture
+- Use xrefs_to to find what calls or references a function/address
+- Use xrefs_from to see what a function calls or references
+- Use disassemble for N instructions at an address, disassemble_function for the full function
 - Never call analyze multiple times - results persist for the session
 - Never guess addresses - always get them from list_functions first
 

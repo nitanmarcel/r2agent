@@ -223,3 +223,102 @@ async def list_strings(
         return "No strings found."
 
     return result
+
+
+@function_tool
+async def xrefs_to(
+    address: str,
+    page: int = 1,
+    page_size: int = 100,
+) -> str:
+    """Find cross-references TO an address.
+
+    Shows where a function, variable, or string is called or referenced from.
+    Use this to find all callers of a function or users of a variable.
+
+    When to Use:
+    - To find all callers of a function
+    - To see what code references a string or variable
+    - To trace how data flows into a location
+
+    Args:
+        address: Target address or symbol (e.g., "main", "0x401000", "str.Hello")
+        page: Page number (default 1)
+        page_size: Results per page (default 100, max 500)
+    """
+    page_size = max(1, min(page_size, 500))
+    page = max(1, page)
+
+    cmd = f"axt,*/page/{page}/{page_size} @ {address}"
+    return await r2(cmd)
+
+
+@function_tool
+async def xrefs_from(
+    address: str,
+) -> str:
+    """Find cross-references FROM a function.
+
+    Shows what a function calls, references, or jumps to. Use this to understand
+    what external functions and data a function depends on.
+
+    When to Use:
+    - To see what functions a function calls
+    - To find what data a function accesses
+    - To understand function dependencies
+
+    Args:
+        address: Source function address or name (e.g., "main", "0x401000")
+    """
+    cmd = f"axff @ {address}"
+    return await r2(cmd)
+
+
+@function_tool
+async def disassemble(
+    address: str,
+    count: int = 20,
+) -> str:
+    """Disassemble instructions at an address.
+
+    Shows assembly code with addresses, opcodes, and operands. Lower-level
+    than decompile - use when you need exact instruction details.
+
+    When to Use:
+    - To see exact machine instructions at an address
+    - To analyze specific code sequences or gadgets
+    - When decompile output is unclear
+
+    When NOT to Use:
+    - Use decompile() for understanding function logic
+    - Use disassemble_function() for the complete function
+
+    Args:
+        address: Start address or symbol (e.g., "main", "0x401000")
+        count: Number of instructions (default 20, use negative for backward)
+
+    To see more instructions, note the last address shown and call
+    disassemble again from that address.
+    """
+    cmd = f"pd {count} @ {address}"
+    return await r2(cmd)
+
+
+@function_tool
+async def disassemble_function(
+    address: str,
+) -> str:
+    """Disassemble an entire function.
+
+    Shows complete assembly code for a function from start to end.
+
+    When to Use:
+    - To see the full assembly of a function
+    - When you need complete instruction coverage
+    - To complement decompile() output with actual assembly
+
+    Args:
+        address: Function address or name (e.g., "main", "0x401000", "sym.main")
+    """
+    cmd = f"pdf @ {address}"
+    return await r2(cmd)
