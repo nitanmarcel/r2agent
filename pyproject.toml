@@ -1,6 +1,6 @@
 [project]
 name = "r2agent"
-version = "0.3.2"
+version = "0.3.3"
 description = "Automate radare2 workflows through autonomous agents."
 authors = [
     {name = "Marcel Alexandru Nitan"}

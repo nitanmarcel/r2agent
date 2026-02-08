@@ -14,7 +14,7 @@ except ImportError:
     _HAS_R2LANG = False
     r2lang = None
 
-_VERSION = "0.3.1"
+_VERSION = "0.3.3"
 
 _agent_process: "R2AgentProcess | None" = None
 
@@ -64,7 +64,7 @@ class R2AgentProcess:
             if sys.platform == "win32":
                 kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
-            self._proc = subprocess.Popen(["r2agent", "stdio"], **kwargs)
+            self._proc = subprocess.Popen(["r2a", "stdio"], **kwargs)
 
             self._running = True
             self._start_reader_thread()
