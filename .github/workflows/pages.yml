@@ -19,10 +19,16 @@ jobs:
           mdbook-version: '0.5.2'
 
       - run: mdbook build
-
+      
+      - name: Upload pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+         path: ./book
+         
+      
       - name: Deploy
-        uses: peaceiris/actions-gh-pages@v3
+        uses: actions/deploy-pages@v4
         if: ${{ github.ref == 'refs/heads/docs' }}
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./book
