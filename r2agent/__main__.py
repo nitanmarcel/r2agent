@@ -6,6 +6,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="R2Agent - AI-powered reverse engineering assistant"
     )
+    parser.add_argument(
+        "-c",
+        "--config",
+        action="store_true",
+        help="Create config file (if it doesn't exist) and print its path",
+    )
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     stdio_parser = subparsers.add_parser(
@@ -23,6 +29,13 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.config:
+        from .config import R2AgentConfig
+
+        R2AgentConfig.load()
+        print(R2AgentConfig.get_config_path())
+        sys.exit(0)
 
     if args.command == "stdio":
         from .stdio_server import run_stdio

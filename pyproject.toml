@@ -1,6 +1,6 @@
 [project]
 name = "r2agent"
-version = "0.3.1"
+version = "0.3.2"
 description = "Automate radare2 workflows through autonomous agents."
 authors = [
     {name = "Marcel Alexandru Nitan"}
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-r2agent = "r2agent.__main__:main"
+r2a = "r2agent.__main__:main"
 
 [tool.poetry]
 packages = [{include = "r2agent"}]
