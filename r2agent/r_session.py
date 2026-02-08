@@ -95,6 +95,8 @@ class RSession:
             else:
                 converted = convert_sdk_event(sdk_event)
                 if converted:
+                    if converted.type == "thinking":
+                        converted.data["agent"] = f"{agent_name}/thinking"
                     await self._on_stream_callback(converted)
 
         return on_stream_wrapper

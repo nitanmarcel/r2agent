@@ -19,7 +19,7 @@
 #include <pthread.h>
 #endif
 
-#define R2A_VERSION "0.3.3"
+#define R2A_VERSION "0.3.4"
 #define R2A_TIMEOUT_MS 30000
 #define R2A_ASK_TIMEOUT_MS 120000
 
@@ -780,6 +780,7 @@ static void r2a_ask(R2A *a, const char *prompt) {
 	free(msg);
 
 	bool cancelled = false;
+	bool in_thinking = false;
 
 #ifndef _WIN32
 	g_current_agent = a;
@@ -838,19 +839,49 @@ static void r2a_ask(R2A *a, const char *prompt) {
 				if (jtype && jtype->str_value) {
 					const char *stype = jtype->str_value;
 
-					if (!strcmp(stype, "text_delta") && jdata) {
+					if (!strcmp(stype, "thinking") && jdata) {
+						const RJson *jdelta = r_json_get(jdata, "delta");
+						if (jdelta && jdelta->str_value) {
+							if (!in_thinking) {
+								const RJson *jagent = r_json_get(jdata, "agent");
+								if (jagent && jagent->str_value) {
+									printf("\n[%s] ", jagent->str_value);
+								} else {
+									printf("\n[thinking] ");
+								}
+								in_thinking = true;
+							}
+							printf("%s", jdelta->str_value);
+							fflush(stdout);
+						}
+					} else if (!strcmp(stype, "text_delta") && jdata) {
+						if (in_thinking) {
+							printf("\n");
+							fflush(stdout);
+							in_thinking = false;
+						}
 						const RJson *jdelta = r_json_get(jdata, "delta");
 						if (jdelta && jdelta->str_value) {
 							printf("%s", jdelta->str_value);
 							fflush(stdout);
 						}
 					} else if (!strcmp(stype, "agent_start") && jdata) {
+						if (in_thinking) {
+							printf("\n");
+							fflush(stdout);
+							in_thinking = false;
+						}
 						const RJson *jname = r_json_get(jdata, "name");
 						if (jname && jname->str_value) {
 							printf("\n[%s] ", jname->str_value);
 							fflush(stdout);
 						}
 					} else if (!strcmp(stype, "tool_call") && jdata) {
+						if (in_thinking) {
+							printf("\n");
+							fflush(stdout);
+							in_thinking = false;
+						}
 						const RJson *jname = r_json_get(jdata, "name");
 						const RJson *jargs = r_json_get(jdata, "args");
 						if (jname && jname->str_value) {

@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import appdirs
 import yaml
@@ -14,6 +14,9 @@ class ProviderConfig(BaseModel):
     api_key: Optional[str] = Field(default=None, description="API key (if required)")
     extra_headers: Optional[dict[str, str]] = Field(
         default=None, description="Extra headers to send with requests"
+    )
+    extra_args: Optional[dict[str, Any]] = Field(
+        default=None, description="Extra provider-specific args passed to the model API"
     )
 
 

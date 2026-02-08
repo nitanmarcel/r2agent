@@ -2,13 +2,19 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Literal
 
+import litellm
 from agents import Agent, ModelSettings, RunConfig, Runner
 from agents.extensions.models.litellm_model import LitellmModel
 from agents.extensions.models.litellm_provider import LitellmProvider
 from agents.result import RunResultStreaming
 from openai.types.responses import ResponseTextDeltaEvent
-
-from .config import get_config
+from openai.types.responses.response_reasoning_summary_text_delta_event import (
+    ResponseReasoningSummaryTextDeltaEvent,
+)
+from openai.types.responses.response_reasoning_text_delta_event import (
+    ResponseReasoningTextDeltaEvent,
+)
+from .config import ProviderConfig, get_config
 
 if TYPE_CHECKING:
     from agents import Handoff, Session, Tool
@@ -20,7 +26,8 @@ OnStreamCallback = Callable[["AgentToolStreamEvent"], Awaitable[None]]
 @dataclass
 class StreamEvent:
     type: Literal[
-        "text_delta", "tool_call", "tool_output", "agent_start", "agent_end", "message"
+        "text_delta", "tool_call", "tool_output", "agent_start", "agent_end", "message",
+        "thinking",
     ]
     data: dict
 
@@ -29,6 +36,11 @@ def convert_sdk_event(sdk_event: Any) -> StreamEvent | None:
     if sdk_event.type == "raw_response_event":
         if isinstance(sdk_event.data, ResponseTextDeltaEvent):
             return StreamEvent(type="text_delta", data={"delta": sdk_event.data.delta})
+        if isinstance(
+            sdk_event.data,
+            (ResponseReasoningSummaryTextDeltaEvent, ResponseReasoningTextDeltaEvent),
+        ):
+            return StreamEvent(type="thinking", data={"delta": sdk_event.data.delta})
 
     elif sdk_event.type == "run_item_stream_event":
         if sdk_event.item.type == "tool_call_item":
@@ -85,6 +97,8 @@ class CancellableStream:
             else:
                 converted = convert_sdk_event(event)
                 if converted:
+                    if converted.type == "thinking":
+                        converted.data["agent"] = f"{current_agent}/thinking"
                     yield converted
 
         yield StreamEvent(type="agent_end", data={"name": current_agent})
@@ -98,6 +112,15 @@ def create_litellm_model(provider_name: str | None = None) -> LitellmModel:
         model=provider.model,
         base_url=provider.base_url,
         api_key=provider.api_key,
+    )
+
+
+def _build_model_settings(provider_config: ProviderConfig) -> ModelSettings:
+    litellm.drop_params = True
+    return ModelSettings(
+        tool_choice="auto",
+        extra_headers=provider_config.extra_headers,
+        extra_args=provider_config.extra_args,
     )
 
 
@@ -129,10 +152,7 @@ class RAgent:
             model=self._model,
             tools=tools or [],
             handoffs=handoffs or [],
-            model_settings=ModelSettings(
-                tool_choice="auto",
-                extra_headers=provider_config.extra_headers,
-            ),
+            model_settings=_build_model_settings(provider_config),
         )
 
     @property
