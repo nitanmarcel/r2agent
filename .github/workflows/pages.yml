@@ -11,6 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
+    permissions:
+      pages: write      # to deploy to Pages
+      id-token: write   # to verify the deployment originates from an appropriate source
     steps:
       - uses: actions/checkout@v2
       - name: Setup mdBook
@@ -30,5 +33,4 @@ jobs:
         uses: actions/deploy-pages@v4
         if: ${{ github.ref == 'refs/heads/docs' }}
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./book
