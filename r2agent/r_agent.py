@@ -6,6 +6,7 @@ import litellm
 from agents import Agent, ModelSettings, RunConfig, Runner
 from agents.extensions.models.litellm_model import LitellmModel
 from agents.extensions.models.litellm_provider import LitellmProvider
+from agents.items import ToolApprovalItem
 from agents.result import RunResultStreaming
 from openai.types.responses import ResponseTextDeltaEvent
 from openai.types.responses.response_reasoning_summary_text_delta_event import (
@@ -71,9 +72,19 @@ def convert_sdk_event(sdk_event: Any) -> StreamEvent | None:
 
 
 class CancellableStream:
-    def __init__(self, stream: RunResultStreaming, agent_name: str) -> None:
+    def __init__(
+        self,
+        stream: RunResultStreaming,
+        agent_name: str,
+        agent: Agent[Any],
+        session: "Session | None" = None,
+        run_config: RunConfig | None = None,
+    ) -> None:
         self._stream = stream
         self._agent_name = agent_name
+        self._agent = agent
+        self._session = session
+        self._run_config = run_config
 
     def cancel(self) -> None:
         self._stream.cancel()
@@ -81,6 +92,25 @@ class CancellableStream:
     @property
     def is_complete(self) -> bool:
         return self._stream.is_complete
+
+    @property
+    def interruptions(self) -> list[ToolApprovalItem]:
+        return self._stream.interruptions
+
+    def resume(self, decisions: list[tuple[ToolApprovalItem, bool]]) -> None:
+        state = self._stream.to_state()
+        for item, approved in decisions:
+            if approved:
+                state.approve(item)
+            else:
+                state.reject(item)
+
+        self._stream = Runner.run_streamed(
+            self._agent,
+            state,
+            session=self._session,
+            run_config=self._run_config,
+        )
 
     async def stream_events(self) -> AsyncIterator[StreamEvent]:
         yield StreamEvent(type="agent_start", data={"name": self._agent_name})
@@ -190,7 +220,13 @@ class RAgent:
             run_config=self._run_config,
         )
 
-        return CancellableStream(stream, self._agent.name)
+        return CancellableStream(
+            stream,
+            self._agent.name,
+            agent=self._agent,
+            session=self._session,
+            run_config=self._run_config,
+        )
 
     def as_tool(
         self,

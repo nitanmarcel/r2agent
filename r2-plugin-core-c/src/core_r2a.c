@@ -921,51 +921,115 @@ static void r2a_ask(R2A *a, const char *prompt) {
 						fflush(stdout);
 					}
 				}
-			} else if (!strcmp(method, "tool_call") && jparams) {
-				const RJson *jcall_id = r_json_get(jparams, "id");
-				const RJson *jname = r_json_get(jparams, "name");
-				const RJson *jargs = r_json_get(jparams, "args");
+		} else if (!strcmp(method, "tool_approval") && jparams) {
+			const RJson *jcall_id = r_json_get(jparams, "id");
+			const RJson *jname = r_json_get(jparams, "name");
+			const RJson *jargs = r_json_get(jparams, "args");
 
-				const char *call_id = jcall_id && jcall_id->str_value ? jcall_id->str_value : "";
-				const char *name = jname && jname->str_value ? jname->str_value : "";
+			const char *call_id = jcall_id && jcall_id->str_value ? jcall_id->str_value : "";
+			const char *name = jname && jname->str_value ? jname->str_value : "";
 
-				char *result = NULL;
-				if (!strcmp(name, "r2cmd") && jargs) {
-					const RJson *jcmd = r_json_get(jargs, "command");
-					if (jcmd && jcmd->str_value) {
-						r2a_log_reset(a);
-						result = r_core_cmd_str(core, jcmd->str_value);
-						char *err = r2a_log_drain(a);
-						if (err) {
-							char *newres = r_str_newf("%s<log>\n%s\n</log>\n",
-								result ? result : "", err);
-							free(result);
-							free(err);
-							result = newres;
-						}
-					}
-				} else if (name[0]) {
-					result = r_str_newf("Unknown tool: %s", name);
-				}
-				if (!result) result = strdup("");
-
-				PJ *rpj = pj_new();
-				if (rpj) {
-					pj_o(rpj);
-					pj_ks(rpj, "jsonrpc", "2.0");
-					pj_ks(rpj, "method", "tool_result");
-					pj_k(rpj, "params");
-					pj_o(rpj);
-					pj_ks(rpj, "id", call_id);
-					pj_ks(rpj, "result", result);
-					pj_end(rpj);
-					pj_end(rpj);
-					char *resp_msg = pj_drain(rpj);
-					r2a_send_message(a, resp_msg);
-					free(resp_msg);
-				}
-				free(result);
+			if (in_thinking) {
+				printf("\n");
+				fflush(stdout);
+				in_thinking = false;
 			}
+
+			printf("\n[approval] %s(", name);
+			if (jargs && jargs->type == R_JSON_OBJECT) {
+				bool first = true;
+				const RJson *arg;
+				for (arg = jargs->children.first; arg; arg = arg->next) {
+					if (!first) printf(", ");
+					first = false;
+					printf("%s=", arg->key ? arg->key : "?");
+					switch (arg->type) {
+					case R_JSON_STRING:
+						printf("%s", arg->str_value);
+						break;
+					case R_JSON_INTEGER:
+						printf("%"PFMT64d, arg->num.s_value);
+						break;
+					case R_JSON_BOOLEAN:
+						printf("%s", arg->num.u_value ? "true" : "false");
+						break;
+					case R_JSON_DOUBLE:
+						printf("%g", arg->num.dbl_value);
+						break;
+					case R_JSON_NULL:
+						printf("null");
+						break;
+					default:
+						printf("...");
+						break;
+					}
+				}
+			}
+			printf(")\n");
+			fflush(stdout);
+
+			bool approved = r_cons_yesno(core->cons, 'y', "  Approve? [Y/n] ");
+
+			PJ *rpj = pj_new();
+			if (rpj) {
+				pj_o(rpj);
+				pj_ks(rpj, "jsonrpc", "2.0");
+				pj_ks(rpj, "method", "tool_approval_response");
+				pj_k(rpj, "params");
+				pj_o(rpj);
+				pj_ks(rpj, "id", call_id);
+				pj_kb(rpj, "approved", approved);
+				pj_end(rpj);
+				pj_end(rpj);
+				char *resp_msg = pj_drain(rpj);
+				r2a_send_message(a, resp_msg);
+				free(resp_msg);
+			}
+		} else if (!strcmp(method, "tool_call") && jparams) {
+			const RJson *jcall_id = r_json_get(jparams, "id");
+			const RJson *jname = r_json_get(jparams, "name");
+			const RJson *jargs = r_json_get(jparams, "args");
+
+			const char *call_id = jcall_id && jcall_id->str_value ? jcall_id->str_value : "";
+			const char *name = jname && jname->str_value ? jname->str_value : "";
+
+			char *result = NULL;
+			if (!strcmp(name, "r2cmd") && jargs) {
+				const RJson *jcmd = r_json_get(jargs, "command");
+				if (jcmd && jcmd->str_value) {
+					r2a_log_reset(a);
+					result = r_core_cmd_str(core, jcmd->str_value);
+					char *err = r2a_log_drain(a);
+					if (err) {
+						char *newres = r_str_newf("%s<log>\n%s\n</log>\n",
+							result ? result : "", err);
+						free(result);
+						free(err);
+						result = newres;
+					}
+				}
+			} else if (name[0]) {
+				result = r_str_newf("Unknown tool: %s", name);
+			}
+			if (!result) result = strdup("");
+
+			PJ *rpj = pj_new();
+			if (rpj) {
+				pj_o(rpj);
+				pj_ks(rpj, "jsonrpc", "2.0");
+				pj_ks(rpj, "method", "tool_result");
+				pj_k(rpj, "params");
+				pj_o(rpj);
+				pj_ks(rpj, "id", call_id);
+				pj_ks(rpj, "result", result);
+				pj_end(rpj);
+				pj_end(rpj);
+				char *resp_msg = pj_drain(rpj);
+				r2a_send_message(a, resp_msg);
+				free(resp_msg);
+			}
+			free(result);
+		}
 		}
 
 		msg_free(m);

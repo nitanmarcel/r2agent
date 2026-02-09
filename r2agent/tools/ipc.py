@@ -26,23 +26,28 @@ async def r2(command: str) -> str:
     return result if result is not None else ""
 
 
-def ipc_tool(func):
-    name = func.__name__
-    sig = inspect.signature(func)
+def ipc_tool(_func=None, *, needs_approval=False):
+    def decorator(func):
+        name = func.__name__
+        sig = inspect.signature(func)
 
-    @wraps(func)
-    async def wrapper(*args, **kwargs) -> str:
-        bound = sig.bind(*args, **kwargs)
-        bound.apply_defaults()
+        @wraps(func)
+        async def wrapper(*args, **kwargs) -> str:
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
 
-        if _ipc_callback is None:
-            return "Error: IPC not connected"
-        try:
-            result = await _ipc_callback(name, dict(bound.arguments))
-            return result if result else "(command executed)"
-        except Exception as e:
-            return f"Error: {e}"
+            if _ipc_callback is None:
+                return "Error: IPC not connected"
+            try:
+                result = await _ipc_callback(name, dict(bound.arguments))
+                return result if result else "(command executed)"
+            except Exception as e:
+                return f"Error: {e}"
 
-    wrapper.__signature__ = sig
+        wrapper.__signature__ = sig
 
-    return function_tool(wrapper)
+        return function_tool(wrapper, needs_approval=needs_approval)
+
+    if _func is not None:
+        return decorator(_func)
+    return decorator

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from importlib.metadata import version
 from typing import Any, Callable
@@ -113,6 +114,7 @@ class ProtocolHandler:
             return
 
         tool_queue: asyncio.Queue[str] = asyncio.Queue()
+        approval_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         tool_call_id = 0
         cancelled = False
 
@@ -153,12 +155,56 @@ class ProtocolHandler:
             session.set_on_stream_callback(on_stream_event)
 
             async def process_stream():
-                async for event in stream.stream_events():
-                    await self._send_notification(
-                        "stream", {"type": event.type, "data": event.data}
-                    )
-                    if event.type == "text_delta":
-                        full_text.append(event.data.get("delta", ""))
+                nonlocal tool_call_id
+
+                while True:
+                    async for event in stream.stream_events():
+                        await self._send_notification(
+                            "stream", {"type": event.type, "data": event.data}
+                        )
+                        if event.type == "text_delta":
+                            full_text.append(event.data.get("delta", ""))
+
+                    if not stream.interruptions:
+                        break
+
+                    decisions = []
+                    for interruption in stream.interruptions:
+                        tool_call_id += 1
+                        call_id = str(tool_call_id)
+
+                        args = interruption.arguments
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except (json.JSONDecodeError, TypeError):
+                                args = {"raw": args}
+
+                        logger.info(
+                            f"Tool approval needed: {interruption.name}({args}), "
+                            f"id={call_id}"
+                        )
+
+                        await self._send_notification(
+                            "tool_approval",
+                            {
+                                "id": call_id,
+                                "name": interruption.name,
+                                "args": args,
+                            },
+                        )
+
+                        response = await approval_queue.get()
+                        approved = response.get("approved", False)
+
+                        logger.info(
+                            f"Tool approval response: {interruption.name} "
+                            f"{'approved' if approved else 'rejected'}"
+                        )
+
+                        decisions.append((interruption, approved))
+
+                    stream.resume(decisions)
 
             async def handle_client_messages():
                 nonlocal cancelled
@@ -169,6 +215,9 @@ class ProtocolHandler:
                         if msg.get("method") == "tool_result":
                             result = msg.get("params", {}).get("result", "")
                             await tool_queue.put(result)
+                        elif msg.get("method") == "tool_approval_response":
+                            approval = msg.get("params", {})
+                            await approval_queue.put(approval)
                         elif msg.get("method") == "cancel":
                             logger.info("Received cancel request from client")
                             cancelled = True

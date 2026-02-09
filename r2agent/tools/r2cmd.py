@@ -1,7 +1,7 @@
 from .ipc import ipc_tool
 
 
-@ipc_tool
+@ipc_tool(needs_approval=True)
 async def r2cmd(command: str) -> str:
     """Execute a raw radare2 command.
 
