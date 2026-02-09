@@ -49,3 +49,5 @@
   * [ ] Custom tools (Python)
   * [ ] Custom tools (IPC)
   * [ ] MCP tools
+* ui
+  * [ ] Visual mode (r2aV)
