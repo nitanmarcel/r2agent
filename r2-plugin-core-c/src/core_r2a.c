@@ -793,6 +793,7 @@ static void r2a_ask(R2A *a, const char *prompt) {
 #endif
 
 	RCore *core = a->core;
+#define R2A_COLOR(x) (core->cons->context->pal.x ? core->cons->context->pal.x : "")
 	while (a->running) {
 #ifdef _WIN32
 		if (WaitForSingleObject(a->cancel_event, 0) == WAIT_OBJECT_0) { cancelled = true; break; }
@@ -845,9 +846,9 @@ static void r2a_ask(R2A *a, const char *prompt) {
 							if (!in_thinking) {
 								const RJson *jagent = r_json_get(jdata, "agent");
 								if (jagent && jagent->str_value) {
-									printf("\n[%s] ", jagent->str_value);
+									printf("\n" Color_GRAY "[%s] ", jagent->str_value);
 								} else {
-									printf("\n[thinking] ");
+									printf("\n" Color_GRAY "[thinking] ");
 								}
 								in_thinking = true;
 							}
@@ -856,7 +857,7 @@ static void r2a_ask(R2A *a, const char *prompt) {
 						}
 					} else if (!strcmp(stype, "text_delta") && jdata) {
 						if (in_thinking) {
-							printf("\n");
+							printf("%s\n", R2A_COLOR(reset));
 							fflush(stdout);
 							in_thinking = false;
 						}
@@ -867,25 +868,25 @@ static void r2a_ask(R2A *a, const char *prompt) {
 						}
 					} else if (!strcmp(stype, "agent_start") && jdata) {
 						if (in_thinking) {
-							printf("\n");
+							printf("%s\n", R2A_COLOR(reset));
 							fflush(stdout);
 							in_thinking = false;
 						}
 						const RJson *jname = r_json_get(jdata, "name");
 						if (jname && jname->str_value) {
-							printf("\n[%s] ", jname->str_value);
+							printf("\n%s[%s]%s ", R2A_COLOR(fname), jname->str_value, R2A_COLOR(reset));
 							fflush(stdout);
 						}
 					} else if (!strcmp(stype, "tool_call") && jdata) {
 						if (in_thinking) {
-							printf("\n");
+							printf("%s\n", R2A_COLOR(reset));
 							fflush(stdout);
 							in_thinking = false;
 						}
 						const RJson *jname = r_json_get(jdata, "name");
 						const RJson *jargs = r_json_get(jdata, "args");
 						if (jname && jname->str_value) {
-							printf("\n  → %s(", jname->str_value);
+							printf("\n%s  → %s(", R2A_COLOR(call), jname->str_value);
 						}
 						if (jargs && jargs->type == R_JSON_OBJECT) {
 							bool first = true;
@@ -916,7 +917,7 @@ static void r2a_ask(R2A *a, const char *prompt) {
 								}
 							}
 						}
-						printf(")\n");
+						printf(")%s\n", R2A_COLOR(reset));
 						fflush(stdout);
 					}
 				}
@@ -978,11 +979,12 @@ static void r2a_ask(R2A *a, const char *prompt) {
 	a->in_request = false;
 
 	if (cancelled) {
-		printf("%s", "\n[interrupted]\n");
+		printf("\n%s[interrupted]%s\n", R2A_COLOR(invalid), R2A_COLOR(reset));
 	} else {
 		printf("%s", "\n");
 	}
 	fflush(stdout);
+#undef PAL
 }
 
 // Session Management
